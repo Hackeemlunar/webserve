@@ -1,0 +1,37 @@
+# Webserv Object Files
+obj/
+
+# Executable
+webserv
+
+# Log files
+*.log
+webserv.log
+
+# Temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE files
+.vscode/
+.idea/
+*.code-workspace
+
+# Debug files
+*.dSYM/
+*.out
+a.out
+
+# Uploaded files (for testing)
+www/uploads/*
+!www/uploads/.gitkeep
+
+# Compiled Object files
+*.o
+*.obj
+
+# Backup files
+*.bak
+*.backup
