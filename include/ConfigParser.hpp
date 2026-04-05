@@ -11,6 +11,7 @@ private:
 	std::string					_configFile;
 	std::vector<ServerConfig>	_serverConfigs;
 	size_t						_currentLine;
+	std::string					_currentLocationPath;
 
 	// Parsing helper methods
 	void		parseServerBlock(std::ifstream& file);

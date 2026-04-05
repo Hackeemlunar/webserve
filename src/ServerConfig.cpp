@@ -1,5 +1,7 @@
 #include "../include/ServerConfig.hpp"
 
+#include <algorithm>
+
 // Orthodox Canonical Form
 ServerConfig::ServerConfig() : _host("0.0.0.0"), _port(8080), _clientMaxBodySize(1048576) {
 }
@@ -93,19 +95,27 @@ const std::vector<std::string>& ServerConfig::getIndex() const {
 
 // Utility methods
 std::string ServerConfig::getErrorPage(int code) const {
-	// TODO: Implementation
-	(void)code;
-	return "";
+	std::map<int, std::string>::const_iterator it = _errorPages.find(code);
+	if (it == _errorPages.end())
+		return "";
+	return it->second;
 }
 
 Route* ServerConfig::matchRoute(const std::string& path) {
-	// TODO: Implementation
-	(void)path;
-	return NULL;
+	Route* best = NULL;
+	size_t bestLength = 0;
+
+	for (size_t i = 0; i < _routes.size(); ++i) {
+		if (_routes[i].matches(path)) {
+			if (_routes[i].getPath().size() >= bestLength) {
+				best = &_routes[i];
+				bestLength = _routes[i].getPath().size();
+			}
+		}
+	}
+	return best;
 }
 
 bool ServerConfig::isServerName(const std::string& name) const {
-	// TODO: Implementation
-	(void)name;
-	return false;
+	return std::find(_serverNames.begin(), _serverNames.end(), name) != _serverNames.end();
 }

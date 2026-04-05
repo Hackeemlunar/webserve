@@ -1,6 +1,6 @@
-#include "include/Server.hpp"
-#include "include/ConfigParser.hpp"
-#include "include/Logger.hpp"
+#include "../include/Server.hpp"
+#include "../include/ConfigParser.hpp"
+#include "../include/Logger.hpp"
 #include <iostream>
 #include <cstdlib>
 #include <csignal>

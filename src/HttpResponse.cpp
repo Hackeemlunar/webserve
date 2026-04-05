@@ -1,5 +1,7 @@
 #include "../include/HttpResponse.hpp"
 
+#include <sstream>
+
 // Orthodox Canonical Form
 HttpResponse::HttpResponse() : _statusCode(200), _statusMessage("OK"), _httpVersion("HTTP/1.1"), _headersSent(false) {
 	setDefaultHeaders();
@@ -69,17 +71,28 @@ const std::string& HttpResponse::getBody() const {
 
 // Response building
 std::string HttpResponse::build() {
-	// TODO: Implementation
-	return "";
+	setContentLength(_body.size());
+	return buildHeaders() + _body;
 }
 
 std::string HttpResponse::buildHeaders() {
-	// TODO: Implementation
-	return "";
+	std::ostringstream oss;
+	oss << _httpVersion << " " << _statusCode << " " << _statusMessage << "\r\n";
+	for (std::map<std::string, std::string>::const_iterator it = _headers.begin(); it != _headers.end(); ++it)
+		oss << it->first << ": " << it->second << "\r\n";
+	oss << "\r\n";
+	_headersSent = true;
+	return oss.str();
 }
 
 void HttpResponse::clear() {
-	// TODO: Implementation
+	_statusCode = 200;
+	_statusMessage = getStatusMessage(200);
+	_httpVersion = "HTTP/1.1";
+	_headers.clear();
+	_body.clear();
+	_headersSent = false;
+	setDefaultHeaders();
 }
 
 // Utility methods
@@ -88,8 +101,9 @@ void HttpResponse::setContentType(const std::string& type) {
 }
 
 void HttpResponse::setContentLength(size_t length) {
-	// TODO: Implementation
-	(void)length;
+	std::ostringstream oss;
+	oss << length;
+	addHeader("Content-Length", oss.str());
 }
 
 void HttpResponse::setLocation(const std::string& location) {
@@ -97,9 +111,7 @@ void HttpResponse::setLocation(const std::string& location) {
 }
 
 void HttpResponse::setCookie(const std::string& name, const std::string& value) {
-	// TODO: Implementation
-	(void)name;
-	(void)value;
+	addHeader("Set-Cookie", name + "=" + value + "; Path=/");
 }
 
 bool HttpResponse::isHeadersSent() const {
@@ -107,18 +119,37 @@ bool HttpResponse::isHeadersSent() const {
 }
 
 void HttpResponse::buildErrorResponse(int code, const std::string& errorPage) {
-	// TODO: Implementation
-	(void)code;
-	(void)errorPage;
+	setStatusCode(code);
+	setContentType("text/html");
+	if (!errorPage.empty()) {
+		setBody(errorPage);
+		return;
+	}
+	std::ostringstream oss;
+	oss << "<html><body><h1>" << code << " " << getStatusMessage(code) << "</h1></body></html>";
+	setBody(oss.str());
 }
 
 // Private helper methods
 std::string HttpResponse::getStatusMessage(int code) const {
-	// TODO: Implementation
-	(void)code;
-	return "OK";
+	switch (code) {
+		case 200: return "OK";
+		case 201: return "Created";
+		case 204: return "No Content";
+		case 301: return "Moved Permanently";
+		case 302: return "Found";
+		case 400: return "Bad Request";
+		case 403: return "Forbidden";
+		case 404: return "Not Found";
+		case 405: return "Method Not Allowed";
+		case 413: return "Payload Too Large";
+		case 500: return "Internal Server Error";
+		case 501: return "Not Implemented";
+		default: return "Unknown";
+	}
 }
 
 void HttpResponse::setDefaultHeaders() {
-	// TODO: Implementation
+	addHeader("Server", "webserv/0.1");
+	addHeader("Connection", "close");
 }

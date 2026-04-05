@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <cstring>
+#include <cerrno>
 
 // Orthodox Canonical Form
 Socket::Socket() : _fd(-1), _port(0), _host("0.0.0.0"), _isListening(false) {
@@ -36,24 +37,54 @@ Socket::~Socket() {
 
 // Socket operations
 bool Socket::create() {
-	// TODO: Implementation
-	return false;
+	_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+	if (_fd < 0)
+		return false;
+
+	setSocketOptions();
+	setNonBlocking();
+
+	std::memset(&_address, 0, sizeof(_address));
+	_address.sin_family = AF_INET;
+	_address.sin_port = htons(_port);
+	if (_host.empty() || _host == "0.0.0.0")
+		_address.sin_addr.s_addr = INADDR_ANY;
+	else if (::inet_pton(AF_INET, _host.c_str(), &_address.sin_addr) != 1)
+		return false;
+
+	return true;
 }
 
 bool Socket::bind() {
-	// TODO: Implementation
-	return false;
+	if (_fd < 0)
+		return false;
+	return ::bind(_fd, reinterpret_cast<struct sockaddr*>(&_address), sizeof(_address)) == 0;
 }
 
 bool Socket::listen(int backlog) {
-	// TODO: Implementation
-	(void)backlog;
-	return false;
+	if (_fd < 0)
+		return false;
+	if (::listen(_fd, backlog) != 0)
+		return false;
+	_isListening = true;
+	return true;
 }
 
 int Socket::accept() {
-	// TODO: Implementation
-	return -1;
+	if (_fd < 0)
+		return -1;
+
+	struct sockaddr_in clientAddr;
+	socklen_t clientLen = sizeof(clientAddr);
+	int clientFd = ::accept(_fd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
+	if (clientFd < 0)
+		return -1;
+
+	int flags = fcntl(clientFd, F_GETFL, 0);
+	if (flags != -1)
+		fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+
+	return clientFd;
 }
 
 void Socket::close() {
@@ -65,11 +96,19 @@ void Socket::close() {
 
 // Private helper methods
 void Socket::setNonBlocking() {
-	// TODO: Implementation
+	if (_fd < 0)
+		return;
+	int flags = fcntl(_fd, F_GETFL, 0);
+	if (flags == -1)
+		return;
+	fcntl(_fd, F_SETFL, flags | O_NONBLOCK);
 }
 
 void Socket::setSocketOptions() {
-	// TODO: Implementation
+	if (_fd < 0)
+		return;
+	int opt = 1;
+	setsockopt(_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 }
 
 // Getters

@@ -1,5 +1,7 @@
 #include "../include/Route.hpp"
 
+#include <algorithm>
+
 // Orthodox Canonical Form
 Route::Route() : _path("/"), _autoindex(false) {
 }
@@ -96,25 +98,30 @@ const std::map<std::string, std::string>& Route::getCgiExtensions() const {
 
 // Utility methods
 bool Route::isMethodAllowed(const std::string& method) const {
-	// TODO: Implementation
-	(void)method;
-	return false;
+	if (_allowedMethods.empty())
+		return true;
+	return std::find(_allowedMethods.begin(), _allowedMethods.end(), method) != _allowedMethods.end();
 }
 
 bool Route::hasCgiExtension(const std::string& ext) const {
-	// TODO: Implementation
-	(void)ext;
-	return false;
+	return _cgiExtensions.find(ext) != _cgiExtensions.end();
 }
 
 std::string Route::getCgiHandler(const std::string& ext) const {
-	// TODO: Implementation
-	(void)ext;
-	return "";
+	std::map<std::string, std::string>::const_iterator it = _cgiExtensions.find(ext);
+	if (it == _cgiExtensions.end())
+		return "";
+	return it->second;
 }
 
 bool Route::matches(const std::string& requestPath) const {
-	// TODO: Implementation
-	(void)requestPath;
-	return false;
+	if (_path == "/")
+		return true;
+	if (requestPath.size() < _path.size())
+		return false;
+	if (requestPath.compare(0, _path.size(), _path) != 0)
+		return false;
+	if (requestPath.size() == _path.size())
+		return true;
+	return requestPath[_path.size()] == '/';
 }

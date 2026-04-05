@@ -13,7 +13,9 @@ private:
 	std::vector<ServerConfig>		_serverConfigs;
 	std::vector<Socket>				_listenSockets;
 	std::map<int, Client>			_clients;
+	std::map<int, ServerConfig*>	_listenConfig;
 	int								_maxFd;
+	bool							_isRunning;
 	fd_set							_readFds;
 	fd_set							_writeFds;
 	fd_set							_masterReadFds;

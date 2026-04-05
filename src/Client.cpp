@@ -1,7 +1,9 @@
 #include "../include/Client.hpp"
+#include "../include/RequestHandler.hpp"
 #include <unistd.h>
 #include <ctime>
 #include <arpa/inet.h>
+#include <cerrno>
 
 // Orthodox Canonical Form
 Client::Client() : _fd(-1), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL) {
@@ -34,31 +36,62 @@ Client::~Client() {
 
 // Client operations
 ssize_t Client::read() {
-	// TODO: Implementation
-	return 0;
+	char buffer[8192];
+	ssize_t bytes = ::recv(_fd, buffer, sizeof(buffer), 0);
+	if (bytes > 0) {
+		appendReadBuffer(std::string(buffer, static_cast<size_t>(bytes)));
+		_request.appendData(std::string(buffer, static_cast<size_t>(bytes)));
+		updateLastActivity();
+		return bytes;
+	}
+	if (bytes == 0)
+		return 0;
+	if (errno == EAGAIN || errno == EWOULDBLOCK)
+		return 1;
+	return -1;
 }
 
 ssize_t Client::write() {
-	// TODO: Implementation
-	return 0;
+	if (_writeBuffer.empty())
+		return 0;
+
+	ssize_t bytes = ::send(_fd, _writeBuffer.c_str(), _writeBuffer.size(), 0);
+	if (bytes > 0) {
+		_writeBuffer.erase(0, static_cast<size_t>(bytes));
+		updateLastActivity();
+		return bytes;
+	}
+	if (bytes == 0)
+		return 0;
+	if (errno == EAGAIN || errno == EWOULDBLOCK)
+		return 1;
+	return -1;
 }
 
 void Client::processRequest() {
-	// TODO: Implementation
+	if (_serverConfig == NULL)
+		return;
+
+	_response.clear();
+	RequestHandler handler(_request, _response, *_serverConfig);
+	handler.handle();
+	setKeepAlive(_request.keepAlive());
+	if (_keepAlive)
+		_response.addHeader("Connection", "keep-alive");
+	else
+		_response.addHeader("Connection", "close");
 }
 
 void Client::prepareResponse() {
-	// TODO: Implementation
+	_writeBuffer = _response.build();
 }
 
 bool Client::isReadComplete() const {
-	// TODO: Implementation
-	return false;
+	return _request.isComplete();
 }
 
 bool Client::isWriteComplete() const {
-	// TODO: Implementation
-	return false;
+	return _writeBuffer.empty();
 }
 
 void Client::close() {
@@ -138,13 +171,12 @@ void Client::clearWriteBuffer() {
 
 // Utility methods
 bool Client::isTimeout(time_t currentTime, time_t timeout) const {
-	// TODO: Implementation
-	(void)currentTime;
-	(void)timeout;
-	return false;
+	return (currentTime - _lastActivity) > timeout;
 }
 
 std::string Client::getClientIp() const {
-	// TODO: Implementation
-	return "";
+	char ip[INET_ADDRSTRLEN];
+	if (::inet_ntop(AF_INET, &_address.sin_addr, ip, sizeof(ip)) == NULL)
+		return "0.0.0.0";
+	return std::string(ip);
 }

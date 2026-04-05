@@ -35,3 +35,4 @@ www/uploads/*
 # Backup files
 *.bak
 *.backup
+.impl.md

@@ -44,8 +44,9 @@ void Logger::setMinLevel(LogLevel level) {
 }
 
 void Logger::setLogFile(const std::string& filename) {
-	// TODO: Implementation
-	(void)filename;
+	if (_logFile.is_open())
+		_logFile.close();
+	_logFile.open(filename.c_str(), std::ios::out | std::ios::app);
 }
 
 void Logger::enableConsole(bool enable) {
@@ -58,9 +59,9 @@ void Logger::enableFile(bool enable) {
 
 // Logging methods
 void Logger::log(LogLevel level, const std::string& message) {
-	// TODO: Implementation
-	(void)level;
-	(void)message;
+	if (level < _minLevel)
+		return;
+	writeLog(level, message);
 }
 
 void Logger::debug(const std::string& message) {
@@ -85,20 +86,38 @@ void Logger::fatal(const std::string& message) {
 
 // Private helper methods
 std::string Logger::getLevelString(LogLevel level) const {
-	// TODO: Implementation
-	(void)level;
-	return "";
+	switch (level) {
+		case DEBUG: return "DEBUG";
+		case INFO: return "INFO";
+		case WARNING: return "WARNING";
+		case ERROR: return "ERROR";
+		case FATAL: return "FATAL";
+		default: return "UNKNOWN";
+	}
 }
 
 std::string Logger::getTimestamp() const {
-	// TODO: Implementation
-	return "";
+	std::time_t now = std::time(NULL);
+	std::tm* tmNow = std::localtime(&now);
+	std::ostringstream oss;
+	oss << std::setfill('0')
+		<< (tmNow->tm_year + 1900) << "-"
+		<< std::setw(2) << (tmNow->tm_mon + 1) << "-"
+		<< std::setw(2) << tmNow->tm_mday << " "
+		<< std::setw(2) << tmNow->tm_hour << ":"
+		<< std::setw(2) << tmNow->tm_min << ":"
+		<< std::setw(2) << tmNow->tm_sec;
+	return oss.str();
 }
 
 void Logger::writeLog(LogLevel level, const std::string& message) {
-	// TODO: Implementation
-	(void)level;
-	(void)message;
+	std::string line = "[" + getTimestamp() + "] [" + getLevelString(level) + "] " + message;
+	if (_toConsole)
+		std::cout << line << std::endl;
+	if (_toFile && _logFile.is_open()) {
+		_logFile << line << std::endl;
+		_logFile.flush();
+	}
 }
 
 // Getters
