@@ -4,7 +4,6 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <cstring>
-#include <cerrno>
 
 // Orthodox Canonical Form
 Socket::Socket() : _fd(-1), _port(0), _host("0.0.0.0"), _isListening(false) {
@@ -80,9 +79,7 @@ int Socket::accept() {
 	if (clientFd < 0)
 		return -1;
 
-	int flags = fcntl(clientFd, F_GETFL, 0);
-	if (flags != -1)
-		fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+	fcntl(clientFd, F_SETFL, O_NONBLOCK);
 
 	return clientFd;
 }
@@ -98,10 +95,7 @@ void Socket::close() {
 void Socket::setNonBlocking() {
 	if (_fd < 0)
 		return;
-	int flags = fcntl(_fd, F_GETFL, 0);
-	if (flags == -1)
-		return;
-	fcntl(_fd, F_SETFL, flags | O_NONBLOCK);
+	fcntl(_fd, F_SETFL, O_NONBLOCK);
 }
 
 void Socket::setSocketOptions() {
