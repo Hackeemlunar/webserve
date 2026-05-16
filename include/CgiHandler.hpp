@@ -4,6 +4,8 @@
 # include <string>
 # include <map>
 # include <vector>
+# include <ctime>
+# include <sys/types.h>
 # include "HttpRequest.hpp"
 # include "HttpResponse.hpp"
 # include "Route.hpp"
@@ -17,6 +19,16 @@ private:
 	std::map<std::string, std::string>	_env;
 	std::string							_output;
 	int									_exitStatus;
+	pid_t								_pid;
+	int									_inputFd;
+	int									_outputFd;
+	bool								_inputOpen;
+	bool								_outputOpen;
+	bool								_processDone;
+	size_t								_inputWritten;
+	std::string							_input;
+	int									_serverPort;
+	time_t								_startTime;
 
 	// Helper methods
 	void		setupEnvironment(const Route& route);
@@ -33,6 +45,16 @@ public:
 
 	// CGI execution
 	bool		execute(const std::string& scriptPath, const Route& route);
+	bool		start(const std::string& scriptPath, const Route& route);
+	ssize_t		writeInput();
+	ssize_t		readOutput();
+	void		closeInput();
+	void		closeOutput();
+	bool		isComplete();
+	bool		isTimeout(time_t now, time_t timeout) const;
+	void		killProcess();
+	void		finish();
+	void		setGatewayError(int statusCode);
 	void		setEnvVariable(const std::string& key, const std::string& value);
 
 	// Getters
@@ -40,10 +62,15 @@ public:
 	int					getExitStatus() const;
 	const std::string&	getScriptPath() const;
 	const std::string&	getCgiExecutable() const;
+	int					getInputFd() const;
+	int					getOutputFd() const;
+	bool				wantsInputWrite() const;
+	bool				wantsOutputRead() const;
 
 	// Setters
 	void		setScriptPath(const std::string& path);
 	void		setCgiExecutable(const std::string& executable);
+	void		setServerPort(int port);
 
 	// Utility methods
 	static bool	isCgiRequest(const std::string& path, const Route& route);

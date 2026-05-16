@@ -6,6 +6,7 @@
 # include "HttpRequest.hpp"
 # include "HttpResponse.hpp"
 # include "ServerConfig.hpp"
+# include "CgiHandler.hpp"
 
 class Client {
 private:
@@ -18,6 +19,7 @@ private:
 	bool				_keepAlive;
 	time_t				_lastActivity;
 	ServerConfig*		_serverConfig;
+	CgiHandler*			_cgi;
 
 	// Helper methods
 	void		updateLastActivity();
@@ -35,6 +37,10 @@ public:
 	ssize_t		write();
 	void		processRequest();
 	void		prepareResponse();
+	void		processCgiInput();
+	void		processCgiOutput();
+	void		finishCgi();
+	void		failCgiTimeout();
 	bool		isReadComplete() const;
 	bool		isWriteComplete() const;
 	void		close();
@@ -48,6 +54,11 @@ public:
 	bool				getKeepAlive() const;
 	time_t				getLastActivity() const;
 	ServerConfig*		getServerConfig() const;
+	bool				hasActiveCgi() const;
+	bool				isCgiComplete();
+	bool				isCgiTimeout(time_t currentTime, time_t timeout) const;
+	int					getCgiInputFd() const;
+	int					getCgiOutputFd() const;
 
 	// Setters
 	void		setFd(int fd);

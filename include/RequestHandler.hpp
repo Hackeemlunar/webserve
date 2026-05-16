@@ -7,6 +7,8 @@
 # include "ServerConfig.hpp"
 # include "Route.hpp"
 
+class CgiHandler;
+
 class RequestHandler {
 private:
 	HttpRequest&		_request;
@@ -39,6 +41,7 @@ public:
 
 	// Main handler
 	void		handle();
+	bool		startCgiIfNeeded(CgiHandler& cgi, bool& handled);
 
 	// Error handling
 	void		handleError(int statusCode);

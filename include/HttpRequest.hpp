@@ -15,6 +15,8 @@ private:
 	std::string							_queryString;
 	bool								_isComplete;
 	bool								_isChunked;
+	bool								_isValid;
+	int									_errorCode;
 	size_t								_contentLength;
 	std::string							_rawRequest;
 
@@ -36,6 +38,8 @@ public:
 	bool		parse(const std::string& rawRequest);
 	void		appendData(const std::string& data);
 	bool		isComplete() const;
+	bool		isValid() const;
+	int			getErrorCode() const;
 	void		clear();
 
 	// Getters

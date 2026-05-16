@@ -26,6 +26,11 @@ private:
 	void		acceptNewConnection(int listenFd);
 	void		handleClientRead(int clientFd);
 	void		handleClientWrite(int clientFd);
+	void		registerClientCgi(int clientFd);
+	void		unregisterClientCgi(Client& client);
+	void		handleCgiInput(int clientFd);
+	void		handleCgiOutput(int clientFd);
+	void		finishClientCgi(int clientFd);
 	void		closeClientConnection(int clientFd);
 	void		updateMaxFd();
 
