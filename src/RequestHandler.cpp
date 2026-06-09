@@ -392,7 +392,7 @@ void RequestHandler::handleRedirect(const std::string& location) {
 }
 
 void RequestHandler::handleCgi() {
-	handleError(502);
+	handleError(502); // is this done or ???
 }
 
 void RequestHandler::handleFileUpload() {
