@@ -28,6 +28,7 @@ A comprehensive guide to all the concepts, techniques, and design decisions in t
 
 ## 1. Project Overview
 
+<<<<<<< HEAD
 
 ```
 raw bytes
@@ -43,6 +44,8 @@ raw bytes
     └────┬─────┘
          │
     ┌────▼─────────┐
+=======
+>>>>>>> 9bbf86834c08b78b7dff70896322e092175c88a0
 **Webserv** is an HTTP/1.1 web server written in C++98. It handles client requests asynchronously using non-blocking sockets and the `select()` system call for I/O multiplexing. It supports static file serving, CGI script execution, file uploads, and a NGINX-like configuration format.
 
 ### Key Constraints

@@ -3,10 +3,10 @@
 #include <algorithm>
 
 // Orthodox Canonical Form
-Route::Route() : _path("/"), _autoindex(false) {
+Route::Route() : _path("/"), _autoindex(false), _redirectCode(301) {
 }
 
-Route::Route(const std::string& path) : _path(path), _autoindex(false) {
+Route::Route(const std::string& path) : _path(path), _autoindex(false), _redirectCode(301) {
 }
 
 Route::Route(const Route& other) {
@@ -21,6 +21,7 @@ Route& Route::operator=(const Route& other) {
 		_autoindex = other._autoindex;
 		_index = other._index;
 		_redirect = other._redirect;
+		_redirectCode = other._redirectCode;
 		_uploadPath = other._uploadPath;
 		_cgiExtensions = other._cgiExtensions;
 	}
@@ -31,10 +32,6 @@ Route::~Route() {
 }
 
 // Setters
-void Route::setPath(const std::string& path) {
-	_path = path;
-}
-
 void Route::addAllowedMethod(const std::string& method) {
 	_allowedMethods.push_back(method);
 }
@@ -53,6 +50,10 @@ void Route::addIndexFile(const std::string& file) {
 
 void Route::setRedirect(const std::string& redirect) {
 	_redirect = redirect;
+}
+
+void Route::setRedirectCode(int code) {
+	_redirectCode = code;
 }
 
 void Route::setUploadPath(const std::string& path) {
@@ -88,12 +89,12 @@ const std::string& Route::getRedirect() const {
 	return _redirect;
 }
 
-const std::string& Route::getUploadPath() const {
-	return _uploadPath;
+int Route::getRedirectCode() const {
+	return _redirectCode;
 }
 
-const std::map<std::string, std::string>& Route::getCgiExtensions() const {
-	return _cgiExtensions;
+const std::string& Route::getUploadPath() const {
+	return _uploadPath;
 }
 
 // Utility methods

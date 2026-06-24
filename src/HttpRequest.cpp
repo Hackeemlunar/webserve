@@ -12,10 +12,54 @@ namespace {
 			out[i] = static_cast<char>(std::tolower(out[i]));
 		return out;
 	}
+
+	static std::string trim(const std::string& value) {
+		size_t start = value.find_first_not_of(" \t\r\n");
+		if (start == std::string::npos)
+			return "";
+		size_t end = value.find_last_not_of(" \t\r\n");
+		return value.substr(start, end - start + 1);
+	}
+
+	static bool parseHexSize(const std::string& line, size_t& size) {
+		std::string clean = trim(line);
+		size_t semicolon = clean.find(';');
+		if (semicolon != std::string::npos)
+			clean = clean.substr(0, semicolon);
+		if (clean.empty())
+			return false;
+		for (size_t i = 0; i < clean.size(); ++i) {
+			if (!std::isxdigit(static_cast<unsigned char>(clean[i])))
+				return false;
+		}
+		size = static_cast<size_t>(std::strtoul(clean.c_str(), NULL, 16));
+		return true;
+	}
+
+	static bool isToken(const std::string& value) {
+		if (value.empty())
+			return false;
+		for (size_t i = 0; i < value.size(); ++i) {
+			unsigned char c = static_cast<unsigned char>(value[i]);
+			if (!std::isalpha(c))
+				return false;
+		}
+		return true;
+	}
+
+	static bool isDigits(const std::string& value) {
+		if (value.empty())
+			return false;
+		for (size_t i = 0; i < value.size(); ++i) {
+			if (!std::isdigit(static_cast<unsigned char>(value[i])))
+				return false;
+		}
+		return true;
+	}
 }
 
 // Orthodox Canonical Form
-HttpRequest::HttpRequest() : _httpVersion("HTTP/1.1"), _isComplete(false), _isChunked(false), _contentLength(0) {
+HttpRequest::HttpRequest() : _httpVersion("HTTP/1.1"), _isComplete(false), _isChunked(false), _isValid(true), _errorCode(0), _contentLength(0) {
 }
 
 HttpRequest::HttpRequest(const HttpRequest& other) {
@@ -32,6 +76,8 @@ HttpRequest& HttpRequest::operator=(const HttpRequest& other) {
 		_queryString = other._queryString;
 		_isComplete = other._isComplete;
 		_isChunked = other._isChunked;
+		_isValid = other._isValid;
+		_errorCode = other._errorCode;
 		_contentLength = other._contentLength;
 		_rawRequest = other._rawRequest;
 	}
@@ -64,11 +110,32 @@ bool HttpRequest::parse(const std::string& rawRequest) {
 		lineEnd = headerSection.find('\n');
 		lineSep = 1;
 	}
-	if (lineEnd == std::string::npos)
-		return false;
+	std::string requestLine;
+	std::string headers;
+	if (lineEnd == std::string::npos) {
+		requestLine = headerSection;
+		headers = "";
+	} else {
+		requestLine = headerSection.substr(0, lineEnd);
+		headers = headerSection.substr(lineEnd + lineSep);
+	}
 
-	parseRequestLine(headerSection.substr(0, lineEnd));
-	parseHeaders(headerSection.substr(lineEnd + lineSep));
+	parseRequestLine(requestLine);
+	if (!_isValid) {
+		_isComplete = true;
+		return false;
+	}
+	parseHeaders(headers);
+	if (!_isValid) {
+		_isComplete = true;
+		return false;
+	}
+	if (_httpVersion == "HTTP/1.1" && (!hasHeader("host") || getHeader("host").empty())) {
+		_isValid = false;
+		_errorCode = 400;
+		_isComplete = true;
+		return false;
+	}
 
 	if (_isChunked) {
 		parseChunkedBody(bodySection);
@@ -88,11 +155,20 @@ bool HttpRequest::parse(const std::string& rawRequest) {
 
 void HttpRequest::appendData(const std::string& data) {
 	_rawRequest.append(data);
-	parse(_rawRequest);
+	std::string rawRequest = _rawRequest;
+	parse(rawRequest);
 }
 
 bool HttpRequest::isComplete() const {
 	return _isComplete;
+}
+
+bool HttpRequest::isValid() const {
+	return _isValid;
+}
+
+int HttpRequest::getErrorCode() const {
+	return _errorCode;
 }
 
 void HttpRequest::clear() {
@@ -104,19 +180,36 @@ void HttpRequest::clear() {
 	_queryString.clear();
 	_isComplete = false;
 	_isChunked = false;
+	_isValid = true;
+	_errorCode = 0;
 	_contentLength = 0;
+	_rawRequest.clear();
 }
 
 // Private parsing helpers
 void HttpRequest::parseRequestLine(const std::string& line) {
 	std::istringstream iss(line);
-	iss >> _method >> _uri >> _httpVersion;
+	std::string extra;
+	if (!(iss >> _method >> _uri >> _httpVersion) || (iss >> extra)) {
+		_isValid = false;
+		_errorCode = 400;
+		return;
+	}
+	if (!isToken(_method) || _uri.empty() || _uri[0] != '/' ||
+		(_httpVersion != "HTTP/1.0" && _httpVersion != "HTTP/1.1")) {
+		_isValid = false;
+		_errorCode = 400;
+		return;
+	}
 	parseUri();
 }
 
 void HttpRequest::parseHeaders(const std::string& headerSection) {
 	std::istringstream iss(headerSection);
 	std::string line;
+	bool hasContentLength = false;
+	bool hasTransferEncoding = false;
+
 	while (std::getline(iss, line)) {
 		if (!line.empty() && line[line.size() - 1] == '\r')
 			line.erase(line.size() - 1);
@@ -124,18 +217,76 @@ void HttpRequest::parseHeaders(const std::string& headerSection) {
 			continue;
 
 		size_t colon = line.find(':');
-		if (colon == std::string::npos)
+		if (colon == std::string::npos || colon == 0) {
+			_isValid = false;
+			_errorCode = 400;
 			continue;
+		}
 
 		std::string key = line.substr(0, colon);
 		std::string value = line.substr(colon + 1);
+		if (key.find_first_of(" \t") != std::string::npos) {
+			_isValid = false;
+			_errorCode = 400;
+			continue;
+		}
 		while (!value.empty() && (value[0] == ' ' || value[0] == '\t'))
 			value.erase(0, 1);
-		_headers[toLowerCase(key)] = value;
+		std::string lowerKey = toLowerCase(key);
+
+		if (lowerKey == "host" && _headers.find("host") != _headers.end()) {
+			_isValid = false;
+			_errorCode = 400;
+			continue;
+		}
+
+		if (lowerKey == "content-length") {
+			if (hasContentLength || hasTransferEncoding) {
+				_isValid = false;
+				_errorCode = 400;
+				continue;
+			}
+			hasContentLength = true;
+		}
+
+		if (lowerKey == "transfer-encoding") {
+			if (hasContentLength) {
+				_isValid = false;
+				_errorCode = 400;
+				continue;
+			}
+			hasTransferEncoding = true;
+		}
+
+		for (size_t i = 0; i < value.size(); ++i) {
+			if (value[i] == '\r' || value[i] == '\n') {
+				_isValid = false;
+				_errorCode = 400;
+				break;
+			}
+		}
+		if (!_isValid)
+			continue;
+
+		_headers[lowerKey] = value;
 	}
 
-	if (hasHeader("content-length"))
-		_contentLength = static_cast<size_t>(std::strtoul(getHeader("content-length").c_str(), NULL, 10));
+	if (!_isValid)
+		return;
+	if (hasHeader("content-length")) {
+		std::string cl = getHeader("content-length");
+		if (!isDigits(cl)) {
+			_isValid = false;
+			_errorCode = 400;
+			return;
+		}
+		_contentLength = static_cast<size_t>(std::strtoul(cl.c_str(), NULL, 10));
+		if (_contentLength > 0 && cl.find_first_not_of("0123456789") != std::string::npos) {
+			_isValid = false;
+			_errorCode = 400;
+			return;
+		}
+	}
 	if (hasHeader("transfer-encoding") && toLowerCase(getHeader("transfer-encoding")) == "chunked")
 		_isChunked = true;
 }
@@ -154,9 +305,51 @@ void HttpRequest::parseUri() {
 }
 
 void HttpRequest::parseChunkedBody(const std::string& bodySection) {
-	_body = bodySection;
-	if (_body.find("\r\n0\r\n\r\n") != std::string::npos || _body.find("\n0\n\n") != std::string::npos)
-		_isComplete = true;
+	std::string decoded;
+	size_t pos = 0;
+
+	while (pos < bodySection.size()) {
+		size_t lineEnd = bodySection.find("\r\n", pos);
+		size_t sepLength = 2;
+		if (lineEnd == std::string::npos) {
+			lineEnd = bodySection.find('\n', pos);
+			sepLength = 1;
+		}
+		if (lineEnd == std::string::npos)
+			return;
+
+		size_t chunkSize = 0;
+		if (!parseHexSize(bodySection.substr(pos, lineEnd - pos), chunkSize)) {
+			_isValid = false;
+			_errorCode = 400;
+			_isComplete = true;
+			return;
+		}
+		pos = lineEnd + sepLength;
+
+		if (chunkSize == 0) {
+			_body = decoded;
+			_contentLength = decoded.size();
+			_isComplete = true;
+			return;
+		}
+
+		if (bodySection.size() < pos + chunkSize)
+			return;
+		decoded.append(bodySection, pos, chunkSize);
+		pos += chunkSize;
+
+		if (bodySection.compare(pos, 2, "\r\n") == 0)
+			pos += 2;
+		else if (pos < bodySection.size() && bodySection[pos] == '\n')
+			pos += 1;
+		else {
+			_isValid = false;
+			_errorCode = 400;
+			_isComplete = true;
+			return;
+		}
+	}
 }
 
 // Getters
@@ -189,35 +382,6 @@ const std::string& HttpRequest::getBody() const {
 
 const std::string& HttpRequest::getQueryString() const {
 	return _queryString;
-}
-
-size_t HttpRequest::getContentLength() const {
-	return _contentLength;
-}
-
-bool HttpRequest::isChunked() const {
-	return _isChunked;
-}
-
-// Setters
-void HttpRequest::setMethod(const std::string& method) {
-	_method = method;
-}
-
-void HttpRequest::setUri(const std::string& uri) {
-	_uri = uri;
-}
-
-void HttpRequest::setHttpVersion(const std::string& version) {
-	_httpVersion = version;
-}
-
-void HttpRequest::addHeader(const std::string& key, const std::string& value) {
-	_headers[key] = value;
-}
-
-void HttpRequest::setBody(const std::string& body) {
-	_body = body;
 }
 
 // Utility methods

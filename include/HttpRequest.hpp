@@ -15,6 +15,8 @@ private:
 	std::string							_queryString;
 	bool								_isComplete;
 	bool								_isChunked;
+	bool								_isValid;
+	int									_errorCode;
 	size_t								_contentLength;
 	std::string							_rawRequest;
 
@@ -36,6 +38,8 @@ public:
 	bool		parse(const std::string& rawRequest);
 	void		appendData(const std::string& data);
 	bool		isComplete() const;
+	bool		isValid() const;
+	int			getErrorCode() const;
 	void		clear();
 
 	// Getters
@@ -46,15 +50,6 @@ public:
 	std::string							getHeader(const std::string& key) const;
 	const std::string&					getBody() const;
 	const std::string&					getQueryString() const;
-	size_t								getContentLength() const;
-	bool								isChunked() const;
-
-	// Setters
-	void		setMethod(const std::string& method);
-	void		setUri(const std::string& uri);
-	void		setHttpVersion(const std::string& version);
-	void		addHeader(const std::string& key, const std::string& value);
-	void		setBody(const std::string& body);
 
 	// Utility methods
 	bool		hasHeader(const std::string& key) const;

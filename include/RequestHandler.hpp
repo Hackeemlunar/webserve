@@ -7,6 +7,8 @@
 # include "ServerConfig.hpp"
 # include "Route.hpp"
 
+class CgiHandler;
+
 class RequestHandler {
 private:
 	HttpRequest&		_request;
@@ -19,13 +21,11 @@ private:
 	void		handlePost();
 	void		handleDelete();
 	void		handleHead();
-	void		handlePut();
 
 	// Helper methods
 	void		serveStaticFile(const std::string& path);
 	void		generateDirectoryListing(const std::string& path);
 	void		handleRedirect(const std::string& location);
-	void		handleCgi();
 	void		handleFileUpload();
 	std::string	resolveFilePath();
 	bool		isAllowedMethod(const std::string& method);
@@ -39,14 +39,11 @@ public:
 
 	// Main handler
 	void		handle();
+	bool		startCgiIfNeeded(CgiHandler& cgi, bool& handled);
 
 	// Error handling
 	void		handleError(int statusCode);
 	void		sendErrorPage(int statusCode);
-
-	// Utility methods
-	void		setRoute(Route* route);
-	Route*		getRoute() const;
 };
 
 #endif

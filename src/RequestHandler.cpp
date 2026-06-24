@@ -2,6 +2,9 @@
 #include "../include/CgiHandler.hpp"
 
 #include <dirent.h>
+#include <ctime>
+#include <cstdlib>
+#include <unistd.h>
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
@@ -17,6 +20,13 @@ namespace {
 		if (::stat(path.c_str(), &st) != 0)
 			return false;
 		return S_ISDIR(st.st_mode);
+	}
+
+	static bool isRegularFile(const std::string& path) {
+		struct stat st;
+		if (::stat(path.c_str(), &st) != 0)
+			return false;
+		return S_ISREG(st.st_mode);
 	}
 
 	static std::string extensionOf(const std::string& path) {
@@ -37,6 +47,128 @@ namespace {
 		if (ext == "gif") return "image/gif";
 		if (ext == "ico") return "image/x-icon";
 		return "application/octet-stream";
+	}
+
+	static int fromHex(char c) {
+		if (c >= '0' && c <= '9')
+			return c - '0';
+		if (c >= 'a' && c <= 'f')
+			return c - 'a' + 10;
+		if (c >= 'A' && c <= 'F')
+			return c - 'A' + 10;
+		return -1;
+	}
+
+	static std::string urlDecode(const std::string& value) {
+		std::string out;
+		for (size_t i = 0; i < value.size(); ++i) {
+			if (value[i] == '%' && i + 2 < value.size()) {
+				int hi = fromHex(value[i + 1]);
+				int lo = fromHex(value[i + 2]);
+				if (hi >= 0 && lo >= 0) {
+					out += static_cast<char>(hi * 16 + lo);
+					i += 2;
+					continue;
+				}
+			}
+			out += value[i];
+		}
+		return out;
+	}
+
+	static std::string trim(const std::string& value) {
+		size_t start = value.find_first_not_of(" \t\r\n\"");
+		if (start == std::string::npos)
+			return "";
+		size_t end = value.find_last_not_of(" \t\r\n\"");
+		return value.substr(start, end - start + 1);
+	}
+
+	static std::string baseName(const std::string& path) {
+		size_t slash = path.find_last_of('/');
+		if (slash == std::string::npos)
+			return path;
+		return path.substr(slash + 1);
+	}
+
+	static std::string sanitizeFileName(const std::string& name) {
+		std::string clean = baseName(name);
+		std::string out;
+		for (size_t i = 0; i < clean.size(); ++i) {
+			char c = clean[i];
+			if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-')
+				out += c;
+		}
+		return out.empty() ? "upload.dat" : out;
+	}
+
+	static std::string joinPath(const std::string& dir, const std::string& file) {
+		if (dir.empty())
+			return file;
+		if (dir[dir.size() - 1] == '/')
+			return dir + file;
+		return dir + "/" + file;
+	}
+
+	static std::string generatedUploadName() {
+		std::ostringstream oss;
+		oss << "upload_" << static_cast<long>(std::time(NULL)) << ".dat";
+		return oss.str();
+	}
+
+	static std::string boundaryFromContentType(const std::string& contentType) {
+		std::string marker = "boundary=";
+		size_t pos = contentType.find(marker);
+		if (pos == std::string::npos)
+			return "";
+		return trim(contentType.substr(pos + marker.size()));
+	}
+
+	static bool extractMultipartFile(const std::string& body, const std::string& boundary,
+		std::string& filename, std::string& content) {
+		if (boundary.empty())
+			return false;
+		std::string delimiter = "--" + boundary;
+		size_t partStart = body.find(delimiter);
+		while (partStart != std::string::npos) {
+			partStart += delimiter.size();
+			if (body.compare(partStart, 2, "--") == 0)
+				return false;
+			if (body.compare(partStart, 2, "\r\n") == 0)
+				partStart += 2;
+			else if (partStart < body.size() && body[partStart] == '\n')
+				partStart += 1;
+
+			size_t headerEnd = body.find("\r\n\r\n", partStart);
+			size_t sepLength = 4;
+			if (headerEnd == std::string::npos) {
+				headerEnd = body.find("\n\n", partStart);
+				sepLength = 2;
+			}
+			if (headerEnd == std::string::npos)
+				return false;
+
+			std::string headers = body.substr(partStart, headerEnd - partStart);
+			size_t filenamePos = headers.find("filename=");
+			if (filenamePos != std::string::npos) {
+				filename = trim(headers.substr(filenamePos + 9));
+				size_t stop = filename.find_first_of(";\r\n");
+				if (stop != std::string::npos)
+					filename = trim(filename.substr(0, stop));
+
+				size_t contentStart = headerEnd + sepLength;
+				size_t nextBoundary = body.find("\r\n" + delimiter, contentStart);
+				if (nextBoundary == std::string::npos)
+					nextBoundary = body.find("\n" + delimiter, contentStart);
+				if (nextBoundary == std::string::npos)
+					return false;
+				content = body.substr(contentStart, nextBoundary - contentStart);
+				return true;
+			}
+			partStart = body.find(delimiter, headerEnd + sepLength);
+		}
+		return false;
 	}
 }
 
@@ -74,14 +206,54 @@ void RequestHandler::handle() {
 		return;
 	}
 
+	if (_request.getBody().size() > _config.getClientMaxBodySize()) {
+		handleError(413);
+		return;
+	}
+
 	if (_request.getMethod() == "GET")
 		handleGet();
+	else if (_request.getMethod() == "HEAD")
+		handleHead();
 	else if (_request.getMethod() == "POST")
 		handlePost();
 	else if (_request.getMethod() == "DELETE")
 		handleDelete();
 	else
 		handleError(405);
+}
+
+bool RequestHandler::startCgiIfNeeded(CgiHandler& cgi, bool& handled) {
+	handled = false;
+	_route = _config.matchRoute(_request.getPath());
+
+	if (_route == NULL)
+		return false;
+	if (!_route->getRedirect().empty())
+		return false;
+	if (_request.getMethod() != "GET" && _request.getMethod() != "POST" && _request.getMethod() != "HEAD")
+		return false;
+	if (!isAllowedMethod(_request.getMethod()))
+		return false;
+
+	std::string scriptPath = resolveFilePath();
+	if (scriptPath.empty())
+		return false;
+	if (!CgiHandler::isCgiRequest(scriptPath, *_route))
+		return false;
+
+	handled = true;
+	if (!pathExists(scriptPath)) {
+		handleError(404);
+		return false;
+	}
+	if (!cgi.start(scriptPath, *_route)) {
+		if (_response.getStatusCode() == 200)
+			handleError(502);
+		return false;
+	}
+	cgi.setServerPort(_config.getPort());
+	return true;
 }
 
 // Private handler methods
@@ -110,20 +282,44 @@ void RequestHandler::handleGet() {
 }
 
 void RequestHandler::handlePost() {
-	handleError(501);
+	std::string filePath = resolveFilePath();
+	if (filePath.empty()) {
+		handleError(403);
+		return;
+	}
+
+	handleFileUpload();
 }
 
 void RequestHandler::handleDelete() {
-	handleError(501);
+	std::string filePath = resolveFilePath();
+	if (filePath.empty()) {
+		handleError(403);
+		return;
+	}
+	if (!pathExists(filePath)) {
+		handleError(404);
+		return;
+	}
+	if (isDirectory(filePath)) {
+		handleError(403);
+		return;
+	}
+	if (!isRegularFile(filePath)) {
+		handleError(403);
+		return;
+	}
+	if (::unlink(filePath.c_str()) != 0) {
+		handleError(403);
+		return;
+	}
+	_response.setStatusCode(204);
+	_response.setBody("");
 }
 
 void RequestHandler::handleHead() {
 	handleGet();
 	_response.setBody("");
-}
-
-void RequestHandler::handlePut() {
-	handleError(501);
 }
 
 // Private helper methods
@@ -157,7 +353,11 @@ void RequestHandler::generateDirectoryListing(const std::string& path) {
 		std::string name(entry->d_name);
 		if (name == ".")
 			continue;
-		html << "<li><a href=\"" << name << "\">" << name << "</a></li>";
+		std::string base = _request.getPath();
+		if (!base.empty() && base[base.size() - 1] != '/')
+    		base += '/';
+
+		html << "<li><a href=\"" << base << name << "\">" << name << "</a></li>";
 	}
 	closedir(dir);
 
@@ -168,18 +368,54 @@ void RequestHandler::generateDirectoryListing(const std::string& path) {
 }
 
 void RequestHandler::handleRedirect(const std::string& location) {
-	_response.setStatusCode(301);
+	int code = (_route != NULL) ? _route->getRedirectCode() : 301;
+	_response.setStatusCode(code);
 	_response.setLocation(location);
 	_response.setContentType("text/html");
-	_response.setBody("<html><body><h1>301 Moved Permanently</h1></body></html>");
-}
-
-void RequestHandler::handleCgi() {
-	// TODO: Implementation
+	std::ostringstream oss;
+	oss << "<html><body><h1>" << code << " " << _response.getStatusMessage() << "</h1></body></html>";
+	_response.setBody(oss.str());
 }
 
 void RequestHandler::handleFileUpload() {
-	// TODO: Implementation
+	if (_route == NULL || _route->getUploadPath().empty()) {
+		handleError(403);
+		return;
+	}
+	if (!pathExists(_route->getUploadPath()) || !isDirectory(_route->getUploadPath())) {
+		handleError(500);
+		return;
+	}
+
+	std::string content = _request.getBody();
+	std::string filename;
+	std::string contentType = _request.getHeader("content-type");
+	std::string boundary = boundaryFromContentType(contentType);
+	if (!boundary.empty())
+		extractMultipartFile(_request.getBody(), boundary, filename, content);
+
+	if (filename.empty()) {
+		std::string requestName = baseName(urlDecode(_request.getPath()));
+		if (requestName.empty() || requestName == "uploads")
+			requestName = generatedUploadName();
+		filename = requestName;
+	}
+
+	std::string destination = joinPath(_route->getUploadPath(), sanitizeFileName(filename));
+	std::ofstream file(destination.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
+	if (!file.is_open()) {
+		handleError(500);
+		return;
+	}
+	file.write(content.c_str(), static_cast<std::streamsize>(content.size()));
+	if (!file.good()) {
+		handleError(500);
+		return;
+	}
+
+	_response.setStatusCode(201);
+	_response.setContentType("text/plain");
+	_response.setBody("Uploaded: " + sanitizeFileName(filename) + "\n");
 }
 
 std::string RequestHandler::resolveFilePath() {
@@ -187,11 +423,11 @@ std::string RequestHandler::resolveFilePath() {
 	if (_route != NULL && !_route->getRoot().empty())
 		root = _route->getRoot();
 
-	std::string reqPath = _request.getPath();
+	std::string reqPath = urlDecode(_request.getPath());
 	if (reqPath.empty())
 		reqPath = "/";
 
-	if (reqPath.find("..") != std::string::npos)
+	if (reqPath.find("..") != std::string::npos || reqPath.find('\0') != std::string::npos)
 		return "";
 
 	std::string relative = reqPath;
@@ -237,13 +473,27 @@ std::string RequestHandler::resolveFilePath() {
 
 bool RequestHandler::isAllowedMethod(const std::string& method) {
 	if (_route == NULL)
-		return method == "GET" || method == "POST" || method == "DELETE";
+		return method == "GET" || method == "POST" || method == "DELETE" || method == "HEAD";
+	if (method == "HEAD")
+		return _route->isMethodAllowed("GET");
 	return _route->isMethodAllowed(method);
 }
 
 // Error handling
 void RequestHandler::handleError(int statusCode) {
 	_response.setStatusCode(statusCode);
+	if (statusCode == 405 && _route != NULL) {
+		const std::vector<std::string>& methods = _route->getAllowedMethods();
+		if (!methods.empty()) {
+			std::string allowed;
+			for (size_t i = 0; i < methods.size(); ++i) {
+				if (i > 0)
+					allowed += ", ";
+				allowed += methods[i];
+			}
+			_response.addHeader("Allow", allowed);
+		}
+	}
 	sendErrorPage(statusCode);
 }
 
@@ -253,6 +503,10 @@ void RequestHandler::sendErrorPage(int statusCode) {
 		std::ifstream file(errorPath.c_str(), std::ios::in | std::ios::binary);
 		if (!file.is_open() && !errorPath.empty() && errorPath[0] == '/')
 			file.open(("." + errorPath).c_str(), std::ios::in | std::ios::binary);
+		if (!file.is_open() && !errorPath.empty() && errorPath[0] == '/')
+			file.open(("./www" + errorPath).c_str(), std::ios::in | std::ios::binary);
+		if (!file.is_open() && !errorPath.empty() && errorPath[0] != '/')
+			file.open((joinPath(_config.getRoot(), errorPath)).c_str(), std::ios::in | std::ios::binary);
 		if (file.is_open()) {
 			std::ostringstream body;
 			body << file.rdbuf();
@@ -268,11 +522,3 @@ void RequestHandler::sendErrorPage(int statusCode) {
 	_response.setBody(fallback.str());
 }
 
-// Utility methods
-void RequestHandler::setRoute(Route* route) {
-	_route = route;
-}
-
-Route* RequestHandler::getRoute() const {
-	return _route;
-}

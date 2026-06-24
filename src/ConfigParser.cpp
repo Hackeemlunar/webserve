@@ -75,11 +75,6 @@ bool ConfigParser::parse() {
 	return true;
 }
 
-void ConfigParser::parse(const std::string& configFile) {
-	setConfigFile(configFile);
-	parse();
-}
-
 // Private parsing helper methods
 void ConfigParser::parseServerBlock(std::ifstream& file) {
 	ServerConfig config;
@@ -190,6 +185,9 @@ void ConfigParser::parseRouteDirective(const std::string& line, Route& route) {
 	} else if (tokens[0] == "upload_path" && tokens.size() >= 2) {
 		route.setUploadPath(tokens[1]);
 	} else if (tokens[0] == "return" && tokens.size() >= 3) {
+		int statusCode = std::atoi(tokens[1].c_str());
+		if (statusCode >= 300 && statusCode <= 399)
+			route.setRedirectCode(statusCode);
 		route.setRedirect(tokens[2]);
 	} else if (tokens[0] == "cgi_extension" && tokens.size() >= 3) {
 		route.addCgiExtension(tokens[1], tokens[2]);
@@ -232,27 +230,9 @@ void ConfigParser::validateServerConfig(const ServerConfig& config) {
 		throw std::runtime_error("Invalid listen port");
 }
 
-bool ConfigParser::isDuplicateServer(const ServerConfig& config) {
-	for (size_t i = 0; i < _serverConfigs.size(); ++i) {
-		if (_serverConfigs[i].getHost() == config.getHost() &&
-			_serverConfigs[i].getPort() == config.getPort())
-			return true;
-	}
-	return false;
-}
-
 // Getters
 const std::vector<ServerConfig>& ConfigParser::getServerConfigs() const {
 	return _serverConfigs;
-}
-
-const std::string& ConfigParser::getConfigFile() const {
-	return _configFile;
-}
-
-// Setters
-void ConfigParser::setConfigFile(const std::string& file) {
-	_configFile = file;
 }
 
 // Static utility methods

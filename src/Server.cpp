@@ -7,7 +7,6 @@
 #include <ctime>
 #include <sstream>
 #include <stdexcept>
-#include <vector>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -43,14 +42,6 @@ Server::~Server() {
 }
 
 // Configuration
-void Server::loadConfig(const std::string& configFile) {
-	ConfigParser parser(configFile);
-	if (!parser.parse())
-		throw std::runtime_error("Failed to parse configuration file");
-
-	_serverConfigs = parser.getServerConfigs();
-}
-
 void Server::addServerConfig(const ServerConfig& config) {
 	_serverConfigs.push_back(config);
 }
@@ -98,15 +89,39 @@ void Server::run() {
 			if (it == _clients.end())
 				continue;
 
+			if (it->second.hasActiveCgi() && it->second.isCgiTimeout(now, 5)) {
+				unregisterClientCgi(it->second);
+				it->second.failCgiTimeout();
+				it->second.prepareResponse();
+				FD_SET(fd, &_masterWriteFds);
+				updateMaxFd();
+				continue;
+			}
+
 			if (it->second.isTimeout(now, 30)) {
 				closeClientConnection(fd);
 				continue;
 			}
 
-			if (FD_ISSET(fd, &_readFds))
+			if (!it->second.hasActiveCgi() && FD_ISSET(fd, &_readFds))
 				handleClientRead(fd);
 
-			if (_clients.find(fd) != _clients.end() && FD_ISSET(fd, &_writeFds))
+			if (_clients.find(fd) == _clients.end())
+				continue;
+
+			it = _clients.find(fd);
+			if (it->second.hasActiveCgi()) {
+				int cgiInputFd = it->second.getCgiInputFd();
+				int cgiOutputFd = it->second.getCgiOutputFd();
+				if (cgiInputFd >= 0 && FD_ISSET(cgiInputFd, &_writeFds))
+					handleCgiInput(fd);
+				if (_clients.find(fd) != _clients.end() && cgiOutputFd >= 0 && FD_ISSET(cgiOutputFd, &_readFds))
+					handleCgiOutput(fd);
+				if (_clients.find(fd) != _clients.end() && _clients[fd].hasActiveCgi() && _clients[fd].isCgiComplete())
+					finishClientCgi(fd);
+			}
+
+			if (_clients.find(fd) != _clients.end() && !_clients[fd].hasActiveCgi() && FD_ISSET(fd, &_writeFds))
 				handleClientWrite(fd);
 		}
 	}
@@ -143,14 +158,32 @@ void Server::setupListenSockets() {
 	_listenSockets.reserve(_serverConfigs.size());
 
 	for (size_t i = 0; i < _serverConfigs.size(); ++i) {
-		Socket socket(_serverConfigs[i].getHost(), _serverConfigs[i].getPort());
+		std::string host = _serverConfigs[i].getHost();
+		int port = _serverConfigs[i].getPort();
+
+		bool found = false;
+		for (size_t j = 0; j < _listenSockets.size(); ++j) {
+			if (_listenSockets[j].getHost() == host && _listenSockets[j].getPort() == port) {
+				int fd = _listenSockets[j].getFd();
+				_listenConfig[fd] = &_serverConfigs[i];
+				std::ostringstream oss;
+				oss << "Sharing existing listen socket for " << host << ":" << port;
+				Logger::getInstance()->info(oss.str());
+				found = true;
+				break;
+			}
+		}
+		if (found)
+			continue;
+
+		Socket socket(host, port);
 		if (!socket.create()) {
-			Logger::getInstance()->warning("Failed to create socket for " + _serverConfigs[i].getHost());
+			Logger::getInstance()->warning("Failed to create socket for " + host);
 			continue;
 		}
 		if (!socket.bind()) {
 			std::ostringstream oss;
-			oss << "Failed to bind " << _serverConfigs[i].getHost() << ":" << _serverConfigs[i].getPort();
+			oss << "Failed to bind " << host << ":" << port;
 			Logger::getInstance()->warning(oss.str());
 			socket.close();
 			continue;
@@ -167,7 +200,7 @@ void Server::setupListenSockets() {
 		FD_SET(fd, &_masterReadFds);
 		_listenConfig[fd] = &_serverConfigs[i];
 		std::ostringstream oss;
-		oss << "Listening on " << _serverConfigs[i].getHost() << ":" << _serverConfigs[i].getPort();
+		oss << "Listening on " << host << ":" << port;
 		Logger::getInstance()->info(oss.str());
 	}
 
@@ -180,14 +213,12 @@ void Server::acceptNewConnection(int listenFd) {
 	socklen_t clientLen = sizeof(clientAddr);
 	int clientFd = ::accept(listenFd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
 	if (clientFd < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK)
-			return;
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			Logger::getInstance()->warning("Accept failed");
 		return;
 	}
 
-	int flags = fcntl(clientFd, F_GETFL, 0);
-	if (flags != -1)
-		fcntl(clientFd, F_SETFL, flags | O_NONBLOCK);
+	fcntl(clientFd, F_SETFL, O_NONBLOCK);
 
 	Client client(clientFd, clientAddr);
 	if (_listenConfig.find(listenFd) != _listenConfig.end())
@@ -213,9 +244,13 @@ void Server::handleClientRead(int clientFd) {
 
 	if (it->second.isReadComplete()) {
 		it->second.processRequest();
-		it->second.prepareResponse();
 		FD_CLR(clientFd, &_masterReadFds);
-		FD_SET(clientFd, &_masterWriteFds);
+		if (it->second.hasActiveCgi()) {
+			registerClientCgi(clientFd);
+		} else {
+			it->second.prepareResponse();
+			FD_SET(clientFd, &_masterWriteFds);
+		}
 	}
 }
 
@@ -244,9 +279,65 @@ void Server::handleClientWrite(int clientFd) {
 	}
 }
 
+void Server::registerClientCgi(int clientFd) {
+	std::map<int, Client>::iterator it = _clients.find(clientFd);
+	if (it == _clients.end())
+		return;
+	int inputFd = it->second.getCgiInputFd();
+	int outputFd = it->second.getCgiOutputFd();
+	if (inputFd >= 0)
+		FD_SET(inputFd, &_masterWriteFds);
+	if (outputFd >= 0)
+		FD_SET(outputFd, &_masterReadFds);
+	updateMaxFd();
+}
+
+void Server::unregisterClientCgi(Client& client) {
+	int inputFd = client.getCgiInputFd();
+	int outputFd = client.getCgiOutputFd();
+	if (inputFd >= 0)
+		FD_CLR(inputFd, &_masterWriteFds);
+	if (outputFd >= 0)
+		FD_CLR(outputFd, &_masterReadFds);
+}
+
+void Server::handleCgiInput(int clientFd) {
+	std::map<int, Client>::iterator it = _clients.find(clientFd);
+	if (it == _clients.end())
+		return;
+	int oldFd = it->second.getCgiInputFd();
+	it->second.processCgiInput();
+	if (oldFd >= 0 && it->second.getCgiInputFd() != oldFd)
+		FD_CLR(oldFd, &_masterWriteFds);
+	updateMaxFd();
+}
+
+void Server::handleCgiOutput(int clientFd) {
+	std::map<int, Client>::iterator it = _clients.find(clientFd);
+	if (it == _clients.end())
+		return;
+	int oldFd = it->second.getCgiOutputFd();
+	it->second.processCgiOutput();
+	if (oldFd >= 0 && it->second.getCgiOutputFd() != oldFd)
+		FD_CLR(oldFd, &_masterReadFds);
+	updateMaxFd();
+}
+
+void Server::finishClientCgi(int clientFd) {
+	std::map<int, Client>::iterator it = _clients.find(clientFd);
+	if (it == _clients.end())
+		return;
+	unregisterClientCgi(it->second);
+	it->second.finishCgi();
+	it->second.prepareResponse();
+	FD_SET(clientFd, &_masterWriteFds);
+	updateMaxFd();
+}
+
 void Server::closeClientConnection(int clientFd) {
 	std::map<int, Client>::iterator it = _clients.find(clientFd);
 	if (it != _clients.end()) {
+		unregisterClientCgi(it->second);
 		it->second.close();
 		_clients.erase(it);
 	}
@@ -261,15 +352,19 @@ void Server::updateMaxFd() {
 		if (_listenSockets[i].getFd() > _maxFd)
 			_maxFd = _listenSockets[i].getFd();
 	for (std::map<int, Client>::const_iterator it = _clients.begin(); it != _clients.end(); ++it)
+	{
 		if (it->first > _maxFd)
 			_maxFd = it->first;
+		int inputFd = it->second.getCgiInputFd();
+		int outputFd = it->second.getCgiOutputFd();
+		if (inputFd > _maxFd)
+			_maxFd = inputFd;
+		if (outputFd > _maxFd)
+			_maxFd = outputFd;
+	}
 }
 
 // Getters
 const std::vector<ServerConfig>& Server::getServerConfigs() const {
 	return _serverConfigs;
-}
-
-int Server::getMaxFd() const {
-	return _maxFd;
 }

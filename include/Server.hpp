@@ -26,6 +26,11 @@ private:
 	void		acceptNewConnection(int listenFd);
 	void		handleClientRead(int clientFd);
 	void		handleClientWrite(int clientFd);
+	void		registerClientCgi(int clientFd);
+	void		unregisterClientCgi(Client& client);
+	void		handleCgiInput(int clientFd);
+	void		handleCgiOutput(int clientFd);
+	void		finishClientCgi(int clientFd);
 	void		closeClientConnection(int clientFd);
 	void		updateMaxFd();
 
@@ -37,7 +42,6 @@ public:
 	~Server();
 
 	// Configuration
-	void		loadConfig(const std::string& configFile);
 	void		addServerConfig(const ServerConfig& config);
 
 	// Main server operations
@@ -51,7 +55,6 @@ public:
 
 	// Getters
 	const std::vector<ServerConfig>&	getServerConfigs() const;
-	int									getMaxFd() const;
 };
 
 #endif
