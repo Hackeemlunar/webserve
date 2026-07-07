@@ -442,8 +442,8 @@ void RequestHandler::handleLogin() {
 	if (it == fields.end()) {
 		_response.setStatusCode(303);
         _response.setLocation("/");
-        _response.setContentType("text/html");
-        _response.setBody("<html><body>Failed to login</body></html>");
+        _response.setContentType("text/plain");
+        _response.setBody("Failed to login\n");
         return;
 	}
 
@@ -451,8 +451,8 @@ void RequestHandler::handleLogin() {
     if (username.empty() || hasWhitespace(username)) {
         _response.setStatusCode(303);
         _response.setLocation("/");
-        _response.setContentType("text/html");
-        _response.setBody("<html><body>Failed to login</body></html>");
+        _response.setContentType("text/plain");
+        _response.setBody("username not valid\n");
         return;
     }
 
@@ -466,19 +466,30 @@ void RequestHandler::handleLogin() {
 
     _response.setStatusCode(303);
     _response.setLocation("/");
-    _response.setContentType("text/html");
-    _response.setBody("<html><body>Successfully logged in</body></html>");
+    _response.setContentType("text/plain");
+    _response.setBody("Successfully logged in\n");
+	return;
 }
 
 void RequestHandler::handleLogout() {
     Session* session = _request.getSession();
-    if (session != NULL)
-        session->unsetData("username");
+    if (session != NULL) {
+		if (session->hasKey("username"))
+			session->unsetData("username");
+		else {
+			_response.setStatusCode(303);
+    		_response.setLocation("/");
+    		_response.setContentType("text/plain");
+			_response.setBody("Not logged in\n");
+			return;
+		}
+	}
 
     _response.setStatusCode(303);
     _response.setLocation("/");
-    _response.setContentType("text/html");
-    _response.setBody("<html><body>Redirecting...</body></html>");
+    _response.setContentType("text/plain");
+    _response.setBody("Successfully logged out\n");
+	return;
 }
 
 void RequestHandler::handleMyUploads() {
