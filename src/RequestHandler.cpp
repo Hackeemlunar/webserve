@@ -96,6 +96,11 @@ namespace {
 		return path.substr(slash + 1);
 	}
 
+	static std::string ownerOf(const std::string& diskName) {
+		size_t tilde = diskName.find('~');
+		return tilde == std::string::npos ? "anonymous" : diskName.substr(0, tilde);
+	}
+
 	static std::string sanitizeFileName(const std::string& name) {
 		std::string clean = baseName(name);
 		std::string out;
@@ -398,20 +403,23 @@ void RequestHandler::handleDelete() {
 		handleError(403);
 		return;
 	}
+
+	std::string diskName = baseName(filePath);
+	std::string owner = ownerOf(diskName);
+	Session* session = _request.getSession();
+	std::string user = (session != NULL && session->hasKey("username"))
+		? session->getValue("username") : "anonymous";
+	if (owner != "anonymous" && owner != user) {
+		handleError(403);
+		return;
+	}
+
 	if (std::remove(filePath.c_str()) != 0) {
 		handleError(403);
 		return;
 	}
 
-	Session* session = _request.getSession();
-	if (session != NULL && session->hasKey("username")) {
-		std::string urlPath = "/uploads/" + baseName(filePath);
-		FileRegistry::getInstance().unregisterFile(session->getValue("username"), urlPath);
-	}
-	else {
-		std::string urlPath = "/uploads/" + baseName(filePath);
-		FileRegistry::getInstance().unregisterFile(urlPath);
-	}
+	FileRegistry::getInstance().unregisterFile(owner, "/uploads/" + diskName);
 	_response.setStatusCode(204);
 	_response.setBody("");
 }
@@ -452,7 +460,8 @@ void RequestHandler::handleLogin() {
 	}
 
 	std::string username = trim(it->second);
-    if (username.empty() || hasWhitespace(username)) {
+    if (username.empty() || hasWhitespace(username) ||
+        username == "anonymous" || sanitizeFileName(username) != username) {
         _response.setStatusCode(303);
         _response.setLocation("/");
         _response.setContentType("text/plain");
@@ -599,7 +608,30 @@ void RequestHandler::handleFileUpload() {
 		filename = requestName;
 	}
 
-	std::string destination = joinPath(_route->getUploadPath(), sanitizeFileName(filename));
+	Session* session = _request.getSession();
+	std::string owner = "anonymous";
+	if (session != NULL && session->hasKey("username"))
+		owner = session->getValue("username");
+
+	std::string clean = sanitizeFileName(filename);
+	std::string diskName = owner + "~" + clean;
+	std::string destination = joinPath(_route->getUploadPath(), diskName);
+	if (owner == "anonymous") {
+		std::string stem = clean;
+		std::string ext;
+		size_t dot = clean.find_last_of('.');
+		if (dot != std::string::npos) {
+			stem = clean.substr(0, dot);
+			ext = clean.substr(dot);
+		}
+		for (int i = 1; pathExists(destination); ++i) {
+			std::ostringstream oss;
+			oss << owner << "~" << stem << "_" << i << ext;
+			diskName = oss.str();
+			destination = joinPath(_route->getUploadPath(), diskName);
+		}
+	}
+
 	std::ofstream file(destination.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
 	if (!file.is_open()) {
 		handleError(500);
@@ -610,22 +642,18 @@ void RequestHandler::handleFileUpload() {
 		handleError(500);
 		return;
 	}
-	
-	std::string url = "/uploads/" + sanitizeFileName(filename);
-	Session* session = _request.getSession();
-	if (session != NULL && session->hasKey("username")) {
-		// Logged-in browser flow: track the file and bounce to the listing page.
-		FileRegistry::getInstance().registerFile(session->getValue("username"), url);
+
+	std::string url = "/uploads/" + diskName;
+	FileRegistry::getInstance().registerFile(owner, url);
+	if (owner != "anonymous") {
 		_response.setStatusCode(303);
 		_response.setLocation("/my-uploads");
 		_response.setContentType("text/plain");
 		_response.setBody("Uploaded\n");
 	} else {
-		_response.setStatusCode(201);
-		_response.setLocation(url);
 		FileRegistry::getInstance().registerFile(url);
 		_response.setStatusCode(201);
-		_response.setLocation("/my-uploads");
+		_response.setLocation(url);
 		_response.setContentType("text/plain");
 		_response.setBody("Created\n");
 	}
