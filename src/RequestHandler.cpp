@@ -6,6 +6,7 @@
 #include <ctime>
 #include <cstdio>
 #include <cstdlib>
+#include <errno.h>
 #include <unistd.h>
 #include <fstream>
 #include <sstream>
@@ -189,14 +190,31 @@ namespace {
         }
         return fields;
     }
-	static bool hasWhitespace(const std::string &username)
-	{
-	    for (size_t i = 0; i < username.length(); i++)
-	    {
-	        if (std::isspace(static_cast<unsigned char>(username[i])))
-	            return true;
-	    }
-	    return false;
+	static std::string sanitizeUsername(const std::string& name) {
+		std::string clean = trim(name);
+		std::string out;
+		for (size_t i = 0; i < clean.size(); ++i) {
+			char c = clean[i];
+			if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '_' || c == '-')
+				out += c;
+		}
+		return out;
+	}
+
+	static bool mkdirRecursive(const std::string& path) {
+		if (path.empty())
+			return false;
+		if (pathExists(path))
+			return isDirectory(path);
+		size_t slash = path.find_last_of('/');
+		if (slash != std::string::npos && slash != 0) {
+			if (!mkdirRecursive(path.substr(0, slash)))
+				return false;
+		}
+		if (::mkdir(path.c_str(), 0755) != 0 && errno != EEXIST)
+			return false;
+		return true;
 	}
 
 	// Returns the index just past the first path segment whose extension is a
@@ -253,11 +271,18 @@ void RequestHandler::handle() {
   	    handleLogout(); return;
   	}
 
-	if (_request.getPath() == "/my-uploads" && _request.getMethod() == "GET")
-	{
-	    handleMyUploads();
-	    return;
-	}
+	if (_request.getMethod() == "GET") {
+        if (_request.getPath() == "/uploads/public" ||
+            _request.getPath().rfind("/uploads/user/", 0) == 0) {
+            handleMyUploads();
+            return;
+        }
+    }
+
+    if (_request.getPath() == "/my-uploads" && _request.getMethod() == "GET") {
+        handleMyUploads();
+        return;
+    }
 
 	_route = _config.matchRoute(_request.getPath());
 
@@ -403,13 +428,17 @@ void RequestHandler::handleDelete() {
 		return;
 	}
 
-	Session* session = _request.getSession();
-	if (session != NULL && session->hasKey("username")) {
-		std::string urlPath = "/uploads/" + baseName(filePath);
-		FileRegistry::getInstance().unregisterFile(session->getValue("username"), urlPath);
-	}
-	else {
-		std::string urlPath = "/uploads/" + baseName(filePath);
+	std::string urlPath = _request.getPath();
+	if (urlPath.find("/uploads/user/") == 0) {
+		size_t start = std::string("/uploads/user/").size();
+		size_t slash = urlPath.find('/', start);
+		if (slash != std::string::npos) {
+			std::string owner = urlPath.substr(start, slash - start);
+			FileRegistry::getInstance().unregisterFile(owner, urlPath);
+		} else {
+			FileRegistry::getInstance().unregisterFile(urlPath);
+		}
+	} else {
 		FileRegistry::getInstance().unregisterFile(urlPath);
 	}
 	_response.setStatusCode(204);
@@ -451,8 +480,8 @@ void RequestHandler::handleLogin() {
         return;
 	}
 
-	std::string username = trim(it->second);
-    if (username.empty() || hasWhitespace(username)) {
+	std::string username = sanitizeUsername(it->second);
+    if (username.empty()) {
         _response.setStatusCode(303);
         _response.setLocation("/");
         _response.setContentType("text/plain");
@@ -599,7 +628,20 @@ void RequestHandler::handleFileUpload() {
 		filename = requestName;
 	}
 
-	std::string destination = joinPath(_route->getUploadPath(), sanitizeFileName(filename));
+	std::string storageRoot;
+	Session* session = _request.getSession();
+	if (session != NULL && session->hasKey("username")) {
+		std::string username = sanitizeUsername(session->getValue("username"));
+		storageRoot = joinPath(joinPath(_route->getUploadPath(), "user"), username);
+	} else {
+		storageRoot = joinPath(_route->getUploadPath(), "public");
+	}
+	if (!mkdirRecursive(storageRoot)) {
+		handleError(500);
+		return;
+	}
+
+	std::string destination = joinPath(storageRoot, sanitizeFileName(filename));
 	std::ofstream file(destination.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
 	if (!file.is_open()) {
 		handleError(500);
@@ -611,22 +653,20 @@ void RequestHandler::handleFileUpload() {
 		return;
 	}
 	
-	std::string url = "/uploads/" + sanitizeFileName(filename);
-	Session* session = _request.getSession();
+	std::string url;
 	if (session != NULL && session->hasKey("username")) {
-		// Logged-in browser flow: track the file and bounce to the listing page.
+		std::string username = sanitizeUsername(session->getValue("username"));
+		url = "/uploads/user/" + username + "/" + sanitizeFileName(filename);
 		FileRegistry::getInstance().registerFile(session->getValue("username"), url);
-		_response.setStatusCode(303);
-		_response.setLocation("/my-uploads");
-		_response.setContentType("text/plain");
-		_response.setBody("Uploaded\n");
 	} else {
+		url = "/uploads/public/" + sanitizeFileName(filename);
 		FileRegistry::getInstance().registerFile(url);
-		_response.setStatusCode(201);
-		_response.setLocation("/my-uploads");
-		_response.setContentType("text/plain");
-		_response.setBody("Created\n");
 	}
+
+	_response.setStatusCode(303);
+	_response.setLocation("/my-uploads");
+	_response.setContentType("text/plain");
+	_response.setBody("Uploaded\n");
 }
 
 std::string RequestHandler::resolveFilePath() {
