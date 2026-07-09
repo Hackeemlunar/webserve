@@ -1,6 +1,7 @@
 #include "../include/Client.hpp"
 #include "../include/RequestHandler.hpp"
 #include "../include/SessionMiddleware.hpp"
+#include "../include/Logger.hpp"
 #include <unistd.h>
 #include <ctime>
 #include <sstream>
@@ -127,6 +128,13 @@ void Client::prepareResponse() {
 	if (_request.getMethod() == "HEAD")
 		_response.setSuppressBody(true);
 	_writeBuffer = _response.build();
+
+	std::ostringstream oss;
+	oss << ipToString(_address) << " \""
+		<< (_request.getMethod().empty() ? "-" : _request.getMethod()) << " "
+		<< (_request.getUri().empty() ? "-" : _request.getUri()) << "\" "
+		<< _response.getStatusCode() << " " << _response.getBody().size();
+	Logger::getInstance()->info(oss.str());
 }
 
 void Client::processCgiInput() {

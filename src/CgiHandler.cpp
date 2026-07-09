@@ -1,4 +1,5 @@
 #include "../include/CgiHandler.hpp"
+#include "../include/Logger.hpp"
 #include <unistd.h>
 #include <cstdlib>
 #include <cstring>
@@ -207,6 +208,10 @@ bool CgiHandler::start(const std::string& scriptPath, const Route& route) {
 	_outputOpen = true;
 	if (_input.empty())
 		closeInput();
+
+	std::ostringstream oss;
+	oss << "CGI started [script=" << _scriptPath << ", interpreter=" << _cgiExecutable << ", pid=" << _pid << "]";
+	Logger::getInstance()->info(oss.str());
 	return true;
 }
 
@@ -279,6 +284,9 @@ void CgiHandler::killProcess() {
 		::kill(_pid, SIGKILL);
 		::waitpid(_pid, &_exitStatus, 0);
 		_processDone = true;
+		std::ostringstream oss;
+		oss << "CGI killed [script=" << _scriptPath << ", pid=" << _pid << "]";
+		Logger::getInstance()->warning(oss.str());
 	}
 	closeInput();
 	closeOutput();
@@ -291,6 +299,10 @@ void CgiHandler::finish() {
 			_processDone = true;
 	}
 	if (WIFEXITED(_exitStatus) && WEXITSTATUS(_exitStatus) != 0 && _output.empty()) {
+		std::ostringstream oss;
+		oss << "CGI failed [script=" << _scriptPath << ", pid=" << _pid
+			<< ", exit=" << WEXITSTATUS(_exitStatus) << "]";
+		Logger::getInstance()->error(oss.str());
 		setGatewayError(502);
 		return;
 	}
