@@ -425,21 +425,15 @@ void RequestHandler::handleFileUpload() {
 	}
 
 	std::string url = "/uploads/" + diskName;
-	FileRegistry::getInstance().registerFile(owner, url);
-	if (owner != "anonymous") {
-		_response.setStatusCode(303);
-		_response.setLocation("/my-uploads");
-		_response.setContentType("text/plain");
-		_response.setBody("Uploaded\n");
-	} else {
-		_response.setStatusCode(201);
-		_response.setLocation(url);
+	if (owner != "anonymous")
+		FileRegistry::getInstance().registerFile(owner, url);	
+	else
 		FileRegistry::getInstance().registerFile(url);
-		_response.setStatusCode(201);
-		_response.setLocation(url);
-		_response.setContentType("text/plain");
-		_response.setBody("Created\n");
-	}
+
+	_response.setStatusCode(303);
+	_response.setLocation("/my-uploads");
+	_response.setContentType("text/plain");
+	_response.setBody("Uploaded\n");
 }
 
 std::string RequestHandler::resolveFilePath() {
