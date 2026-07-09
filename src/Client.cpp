@@ -19,10 +19,10 @@ namespace {
 
 
 // Orthodox Canonical Form
-Client::Client() : _fd(-1), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL) {
+Client::Client() : _fd(-1), _writeOffset(0), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL) {
 }
 
-Client::Client(int fd, const struct sockaddr_in& address) : _fd(fd), _address(address), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL) {
+Client::Client(int fd, const struct sockaddr_in& address) : _fd(fd), _address(address), _writeOffset(0), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL) {
 }
 
 Client::Client(const Client& other) {
@@ -37,6 +37,7 @@ Client& Client::operator=(const Client& other) {
 		_response = other._response;
 		_readBuffer = other._readBuffer;
 		_writeBuffer = other._writeBuffer;
+		_writeOffset = other._writeOffset;
 		_keepAlive = other._keepAlive;
 		_lastActivity = other._lastActivity;
 		_serverConfig = other._serverConfig;
@@ -68,12 +69,16 @@ ssize_t Client::read() {
 }
 
 ssize_t Client::write() {
-	if (_writeBuffer.empty())
+	if (_writeOffset >= _writeBuffer.size())
 		return 0;
 
-	ssize_t bytes = ::send(_fd, _writeBuffer.c_str(), _writeBuffer.size(), MSG_NOSIGNAL);
+	ssize_t bytes = ::send(_fd, _writeBuffer.c_str() + _writeOffset, _writeBuffer.size() - _writeOffset, MSG_NOSIGNAL);
 	if (bytes > 0) {
-		_writeBuffer.erase(0, static_cast<size_t>(bytes));
+		_writeOffset += static_cast<size_t>(bytes);
+		if (_writeOffset >= _writeBuffer.size()) {
+			_writeBuffer.clear();
+			_writeOffset = 0;
+		}
 		updateLastActivity();
 		return bytes;
 	}
@@ -127,6 +132,7 @@ void Client::prepareResponse() {
 	if (_request.getMethod() == "HEAD")
 		_response.setSuppressBody(true);
 	_writeBuffer = _response.build();
+	_writeOffset = 0;
 
 	std::ostringstream oss;
 	oss << ipToString(_address) << " \""
@@ -181,7 +187,7 @@ bool Client::isReadComplete() const {
 }
 
 bool Client::isWriteComplete() const {
-	return _writeBuffer.empty();
+	return _writeOffset >= _writeBuffer.size();
 }
 
 void Client::close() {
@@ -264,6 +270,7 @@ void Client::clearReadBuffer() {
 
 void Client::clearWriteBuffer() {
 	_writeBuffer.clear();
+	_writeOffset = 0;
 }
 
 // Utility methods

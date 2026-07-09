@@ -371,7 +371,9 @@ void RequestHandler::handleRedirect(const std::string& location) {
 
 void RequestHandler::handleFileUpload() {
 	if (_route == NULL || _route->getUploadPath().empty()) {
-		handleError(403);
+		_response.setStatusCode(200);
+		_response.setContentType("text/plain");
+		_response.setBody("");
 		return;
 	}
 	if (!pathExists(_route->getUploadPath()) || !isDirectory(_route->getUploadPath())) {

@@ -22,6 +22,7 @@ private:
 	HttpResponse		_response;
 	std::string			_readBuffer;
 	std::string			_writeBuffer;
+	size_t				_writeOffset;
 	bool				_keepAlive;
 	time_t				_lastActivity;
 	ServerConfig*		_serverConfig;
