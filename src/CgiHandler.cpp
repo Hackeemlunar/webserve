@@ -13,6 +13,11 @@
 #include <limits.h>
 
 namespace {
+	// CGI bodies larger than this are streamed via a temp file instead of being
+	// held in memory. Keeps small/common CGI responses in memory (unchanged),
+	// bounds memory under large concurrent bodies.
+	static const size_t SPILL_THRESHOLD = 1024 * 1024;
+
 	static std::string toString(size_t value) {
 		std::ostringstream oss;
 		oss << value;
@@ -66,7 +71,7 @@ namespace {
 }
 
 // Orthodox Canonical Form
-CgiHandler::CgiHandler(HttpRequest& request, HttpResponse& response) : _request(request), _response(response), _exitStatus(0), _pid(-1), _inputFd(-1), _outputFd(-1), _inputOpen(false), _outputOpen(false), _processDone(false), _inputWritten(0), _serverPort(80), _startTime(0) {
+CgiHandler::CgiHandler(HttpRequest& request, HttpResponse& response) : _request(request), _response(response), _exitStatus(0), _pid(-1), _inputFd(-1), _outputFd(-1), _inputOpen(false), _outputOpen(false), _processDone(false), _inputWritten(0), _serverPort(80), _startTime(0), _bodyFd(-1), _bodyBytes(0), _headersLocated(false), _bodyStart(0) {
 }
 
 CgiHandler::CgiHandler(const CgiHandler& other) : _request(other._request), _response(other._response) {
@@ -88,6 +93,10 @@ CgiHandler::CgiHandler(const CgiHandler& other) : _request(other._request), _res
 	_pathInfo = other._pathInfo;
 	_pathTranslated = other._pathTranslated;
 	_remoteAddr = other._remoteAddr;
+	_bodyFd = -1;
+	_bodyBytes = other._bodyBytes;
+	_headersLocated = other._headersLocated;
+	_bodyStart = other._bodyStart;
 }
 
 CgiHandler& CgiHandler::operator=(const CgiHandler& other) {
@@ -110,6 +119,10 @@ CgiHandler& CgiHandler::operator=(const CgiHandler& other) {
 		_pathInfo = other._pathInfo;
 		_pathTranslated = other._pathTranslated;
 		_remoteAddr = other._remoteAddr;
+		_bodyFd = -1;
+		_bodyBytes = other._bodyBytes;
+		_headersLocated = other._headersLocated;
+		_bodyStart = other._bodyStart;
 	}
 	return *this;
 }
@@ -117,6 +130,7 @@ CgiHandler& CgiHandler::operator=(const CgiHandler& other) {
 CgiHandler::~CgiHandler() {
 	closeInput();
 	closeOutput();
+	closeBodyFile();
 }
 
 // CGI execution
@@ -138,6 +152,10 @@ bool CgiHandler::start(const std::string& scriptPath, const Route& route) {
 	_processDone = false;
 	_inputWritten = 0;
 	_startTime = std::time(NULL);
+	closeBodyFile();
+	_bodyBytes = 0;
+	_headersLocated = false;
+	_bodyStart = 0;
 
 	if (_cgiExecutable.empty()) {
 		_response.setStatusCode(404);
@@ -248,11 +266,74 @@ ssize_t CgiHandler::readOutput() {
 	char buffer[65536];
 	ssize_t bytes = ::read(_outputFd, buffer, sizeof(buffer));
 	if (bytes > 0) {
-		_output.append(buffer, static_cast<size_t>(bytes));
 		_startTime = std::time(NULL);
+		if (_bodyFd >= 0) {
+			// Already spilling: the header block stays in _output, the body
+			// goes straight to the temp file so memory stays bounded.
+			if (::write(_bodyFd, buffer, static_cast<size_t>(bytes)) == bytes)
+				_bodyBytes += static_cast<size_t>(bytes);
+			else
+				closeBodyFile();
+			return bytes;
+		}
+		_output.append(buffer, static_cast<size_t>(bytes));
+		if (!_headersLocated) {
+			size_t end = _output.find("\r\n\r\n");
+			size_t sep = 4;
+			if (end == std::string::npos) {
+				end = _output.find("\n\n");
+				sep = 2;
+			}
+			if (end != std::string::npos) {
+				_headersLocated = true;
+				_bodyStart = end + sep;
+			}
+		}
+		// Once headers are known and the buffered body exceeds the threshold,
+		// move it to a temp file and free the in-memory copy.
+		if (_headersLocated && _output.size() - _bodyStart > SPILL_THRESHOLD) {
+			openBodyFile();
+			if (_bodyFd >= 0) {
+				size_t len = _output.size() - _bodyStart;
+				if (::write(_bodyFd, _output.c_str() + _bodyStart, len) == static_cast<ssize_t>(len)) {
+					_bodyBytes = len;
+					_output.resize(_bodyStart);
+				} else {
+					closeBodyFile();
+				}
+			}
+		}
 	} else if (bytes == 0)
 		closeOutput();
 	return bytes;
+}
+
+void CgiHandler::openBodyFile() {
+	if (_bodyFd >= 0)
+		return;
+	static unsigned long counter = 0;
+	std::ostringstream oss;
+	oss << "/tmp/webserv_cgi_" << static_cast<long>(_pid) << "_" << counter++;
+	_bodyFd = ::open(oss.str().c_str(), O_RDWR | O_CREAT | O_EXCL, 0600);
+	if (_bodyFd >= 0)
+		::unlink(oss.str().c_str());
+}
+
+void CgiHandler::closeBodyFile() {
+	if (_bodyFd >= 0)
+		::close(_bodyFd);
+	_bodyFd = -1;
+}
+
+bool CgiHandler::hasBodyFile() const {
+	return _bodyFd >= 0;
+}
+
+int CgiHandler::releaseBodyFile(size_t& size) {
+	int fd = _bodyFd;
+	size = _bodyBytes;
+	_bodyFd = -1;
+	return fd;
 }
 
 void CgiHandler::closeInput() {
@@ -293,6 +374,7 @@ void CgiHandler::killProcess() {
 	}
 	closeInput();
 	closeOutput();
+	closeBodyFile();
 }
 
 void CgiHandler::finish() {
@@ -310,6 +392,11 @@ void CgiHandler::finish() {
 		return;
 	}
 	parseOutput();
+	// Body was spilled to the temp file: parseOutput left the response body
+	// empty; tell the response its entity is external so Content-Length is
+	// correct and the client streams it straight from the file.
+	if (_bodyFd >= 0)
+		_response.setExternalBodyLength(_bodyBytes);
 }
 
 void CgiHandler::setGatewayError(int statusCode) {

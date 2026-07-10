@@ -23,14 +23,22 @@ private:
 	std::string			_readBuffer;
 	std::string			_writeBuffer;
 	size_t				_writeOffset;
+	size_t				_bodyOffset;
 	bool				_continueSent;
 	bool				_keepAlive;
 	time_t				_lastActivity;
 	ServerConfig*		_serverConfig;
 	CgiHandler*			_cgi;
+	// Large CGI response bodies are streamed from this temp file (handed over by
+	// CgiHandler) instead of being held in memory. -1 when the body is in
+	// _response's buffer. Closed on every teardown path so it never leaks.
+	int					_bodyFd;
+	size_t				_bodyFileSize;
+	size_t				_bodyFileSent;
 
 	// Helper methods
 	void		updateLastActivity();
+	void		closeBodyFile();
 
 public:
 	// Orthodox Canonical Form

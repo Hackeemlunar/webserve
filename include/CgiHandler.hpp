@@ -32,12 +32,21 @@ private:
 	std::string							_pathInfo;
 	std::string							_pathTranslated;
 	std::string							_remoteAddr;
+	// Large CGI bodies are spilled to a temp file so the server never holds the
+	// whole entity in memory (a 100MB echo under heavy concurrency would OOM
+	// otherwise). _output keeps only the header block once spilling starts.
+	int									_bodyFd;
+	size_t								_bodyBytes;
+	bool								_headersLocated;
+	size_t								_bodyStart;
 
 	// Helper methods
 	void		setupEnvironment(const Route& route);
 	void		parseOutput();
 	char**		getEnvArray() const;
 	void		freeEnvArray(char** env) const;
+	void		openBodyFile();
+	void		closeBodyFile();
 
 public:
 	// Orthodox Canonical Form
@@ -71,6 +80,12 @@ public:
 	int					getOutputFd() const;
 	bool				wantsInputWrite() const;
 	bool				wantsOutputRead() const;
+	// Hand the spilled-body temp file to the client for streaming. Returns the
+	// fd (positioned arbitrarily; caller must seek) and sets size, transferring
+	// ownership so this handler no longer closes it. Returns -1 if the body was
+	// small enough to stay in memory (served from the response body instead).
+	bool				hasBodyFile() const;
+	int					releaseBodyFile(size_t& size);
 
 	// Setters
 	void		setServerPort(int port);

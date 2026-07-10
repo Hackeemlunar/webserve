@@ -15,6 +15,9 @@ class HttpResponse {
 	bool								_setCookie;
 	std::string							_cookieHeader;
 	bool								_suppressBody;
+	// When the entity is served from a file (large CGI output) rather than
+	// _body, this holds its length for Content-Length; -1 means "use _body".
+	long								_externalBodyLength;
 
 	// Helper methods
 	std::string		getStatusMessage(int code) const;
@@ -45,9 +48,19 @@ public:
 	const std::string&					getStatusMessage() const;
 	const std::string&					getBody() const;
 	const std::string&					getCookieHeader() const;
+	bool								isBodySuppressed() const;
+	// Large-body streaming from a file (see CgiHandler spill). When set, the
+	// client streams Content-Length bytes from its own fd, not from getBody().
+	void								setExternalBodyLength(size_t length);
+	bool								hasExternalBody() const;
+	size_t								getExternalBodyLength() const;
 
 	// Response building
 	std::string		build();
+	// Headers only (sets Content-Length + Date). The body is streamed
+	// separately straight from getBody() so a large entity is never copied
+	// into a second buffer — see Client::write().
+	std::string		buildHead();
 	void			clear();
 
 	// Utility methods

@@ -16,7 +16,7 @@
 #include <ctime>
 
 // Orthodox Canonical Form
-HttpResponse::HttpResponse() : _statusCode(200), _statusMessage("OK"), _httpVersion("HTTP/1.1"), _setCookie(false), _cookieHeader(""), _suppressBody(false) {
+HttpResponse::HttpResponse() : _statusCode(200), _statusMessage("OK"), _httpVersion("HTTP/1.1"), _setCookie(false), _cookieHeader(""), _suppressBody(false), _externalBodyLength(-1) {
 	setDefaultHeaders();
 }
 
@@ -34,6 +34,7 @@ HttpResponse& HttpResponse::operator=(const HttpResponse& other) {
 		_setCookie = other._setCookie;
 		_cookieHeader = other._cookieHeader;
 		_suppressBody = other._suppressBody;
+		_externalBodyLength = other._externalBodyLength;
 	}
 	return *this;
 }
@@ -86,13 +87,35 @@ const std::string& HttpResponse::getCookieHeader() const {
 	return _cookieHeader;
 }
 
+bool HttpResponse::isBodySuppressed() const {
+	return _suppressBody;
+}
+
+void HttpResponse::setExternalBodyLength(size_t length) {
+	_externalBodyLength = static_cast<long>(length);
+}
+
+bool HttpResponse::hasExternalBody() const {
+	return _externalBodyLength >= 0;
+}
+
+size_t HttpResponse::getExternalBodyLength() const {
+	return static_cast<size_t>(_externalBodyLength);
+}
+
 // Response building
 std::string HttpResponse::build() {
-	setContentLength(_body.size());
+	setContentLength(hasExternalBody() ? getExternalBodyLength() : _body.size());
 	addHeader("Date", getHttpDate());
 	if (_suppressBody)
 		return buildHeaders();
 	return buildHeaders() + _body;
+}
+
+std::string HttpResponse::buildHead() {
+	setContentLength(hasExternalBody() ? getExternalBodyLength() : _body.size());
+	addHeader("Date", getHttpDate());
+	return buildHeaders();
 }
 
 std::string HttpResponse::buildHeaders() {
@@ -113,6 +136,7 @@ void HttpResponse::clear() {
 	_setCookie = false;
 	_cookieHeader.clear();
 	_suppressBody = false;
+	_externalBodyLength = -1;
 	setDefaultHeaders();
 }
 

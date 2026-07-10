@@ -19,10 +19,10 @@ namespace {
 
 
 // Orthodox Canonical Form
-Client::Client() : _fd(-1), _writeOffset(0), _continueSent(false), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL) {
+Client::Client() : _fd(-1), _writeOffset(0), _bodyOffset(0), _continueSent(false), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL), _bodyFd(-1), _bodyFileSize(0), _bodyFileSent(0) {
 }
 
-Client::Client(int fd, const struct sockaddr_in& address) : _fd(fd), _address(address), _writeOffset(0), _continueSent(false), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL) {
+Client::Client(int fd, const struct sockaddr_in& address) : _fd(fd), _address(address), _writeOffset(0), _bodyOffset(0), _continueSent(false), _keepAlive(true), _lastActivity(std::time(NULL)), _serverConfig(NULL), _cgi(NULL), _bodyFd(-1), _bodyFileSize(0), _bodyFileSent(0) {
 }
 
 Client::Client(const Client& other) {
@@ -38,11 +38,15 @@ Client& Client::operator=(const Client& other) {
 		_readBuffer = other._readBuffer;
 		_writeBuffer = other._writeBuffer;
 		_writeOffset = other._writeOffset;
+		_bodyOffset = other._bodyOffset;
 		_continueSent = other._continueSent;
 		_keepAlive = other._keepAlive;
 		_lastActivity = other._lastActivity;
 		_serverConfig = other._serverConfig;
 		_cgi = NULL;
+		_bodyFd = -1;
+		_bodyFileSize = 0;
+		_bodyFileSent = 0;
 	}
 	return *this;
 }
@@ -53,6 +57,7 @@ Client::~Client() {
 		delete _cgi;
 		_cgi = NULL;
 	}
+	closeBodyFile();
 }
 
 // Client operations
@@ -75,20 +80,50 @@ ssize_t Client::read() {
 }
 
 ssize_t Client::write() {
-	if (_writeOffset >= _writeBuffer.size())
-		return 0;
-
-	ssize_t bytes = ::send(_fd, _writeBuffer.c_str() + _writeOffset, _writeBuffer.size() - _writeOffset, MSG_NOSIGNAL);
-	if (bytes > 0) {
-		_writeOffset += static_cast<size_t>(bytes);
-		if (_writeOffset >= _writeBuffer.size()) {
-			_writeBuffer.clear();
-			_writeOffset = 0;
+	// Headers first (small). One send per call, as select() requires.
+	if (_writeOffset < _writeBuffer.size()) {
+		ssize_t bytes = ::send(_fd, _writeBuffer.c_str() + _writeOffset, _writeBuffer.size() - _writeOffset, MSG_NOSIGNAL);
+		if (bytes > 0) {
+			_writeOffset += static_cast<size_t>(bytes);
+			updateLastActivity();
+			return bytes;
 		}
-		updateLastActivity();
-		return bytes;
+		return -1;
 	}
-	return -1;
+	if (_response.isBodySuppressed())
+		return 0;
+	// A large CGI body lives in a temp file, streamed in bounded chunks so the
+	// server never holds the whole 100MB entity in memory.
+	if (_bodyFd >= 0) {
+		if (_bodyFileSent >= _bodyFileSize)
+			return 0;
+		char buffer[65536];
+		if (::lseek(_bodyFd, static_cast<off_t>(_bodyFileSent), SEEK_SET) < 0)
+			return -1;
+		ssize_t n = ::read(_bodyFd, buffer, sizeof(buffer));
+		if (n <= 0)
+			return -1;
+		ssize_t bytes = ::send(_fd, buffer, static_cast<size_t>(n), MSG_NOSIGNAL);
+		if (bytes > 0) {
+			_bodyFileSent += static_cast<size_t>(bytes);
+			updateLastActivity();
+			return bytes;
+		}
+		return -1;
+	}
+	// Otherwise the body is in the response buffer, streamed straight from there
+	// so it is never duplicated into _writeBuffer.
+	const std::string& body = _response.getBody();
+	if (_bodyOffset < body.size()) {
+		ssize_t bytes = ::send(_fd, body.c_str() + _bodyOffset, body.size() - _bodyOffset, MSG_NOSIGNAL);
+		if (bytes > 0) {
+			_bodyOffset += static_cast<size_t>(bytes);
+			updateLastActivity();
+			return bytes;
+		}
+		return -1;
+	}
+	return 0;
 }
 
 void Client::processRequest() {
@@ -96,6 +131,7 @@ void Client::processRequest() {
 		return;
 
 	_response.clear();
+	closeBodyFile();
 	if (_cgi != NULL) {
 		_cgi->killProcess();
 		delete _cgi;
@@ -137,14 +173,16 @@ void Client::processRequest() {
 void Client::prepareResponse() {
 	if (_request.getMethod() == "HEAD")
 		_response.setSuppressBody(true);
-	_writeBuffer = _response.build();
+	_writeBuffer = _response.buildHead();
 	_writeOffset = 0;
+	_bodyOffset = 0;
 
 	std::ostringstream oss;
 	oss << ipToString(_address) << " \""
 		<< (_request.getMethod().empty() ? "-" : _request.getMethod()) << " "
 		<< (_request.getUri().empty() ? "-" : _request.getUri()) << "\" "
-		<< _response.getStatusCode() << " " << _response.getBody().size();
+		<< _response.getStatusCode() << " "
+		<< (_response.hasExternalBody() ? _response.getExternalBodyLength() : _response.getBody().size());
 	Logger::getInstance()->info(oss.str());
 }
 
@@ -166,6 +204,11 @@ void Client::finishCgi() {
 	if (_cgi == NULL)
 		return;
 	_cgi->finish();
+	// Take ownership of the spilled-body temp file (if any) so it can be
+	// streamed to the client after the CGI handler is gone.
+	closeBodyFile();
+	if (_response.hasExternalBody() && _cgi->hasBodyFile())
+		_bodyFd = _cgi->releaseBodyFile(_bodyFileSize);
 	delete _cgi;
 	_cgi = NULL;
 	SessionMiddleware sessionMiddleware;
@@ -193,7 +236,13 @@ bool Client::isReadComplete() const {
 }
 
 bool Client::isWriteComplete() const {
-	return _writeOffset >= _writeBuffer.size();
+	if (_writeOffset < _writeBuffer.size())
+		return false;
+	if (_response.isBodySuppressed())
+		return true;
+	if (_bodyFd >= 0)
+		return _bodyFileSent >= _bodyFileSize;
+	return _bodyOffset >= _response.getBody().size();
 }
 
 void Client::close() {
@@ -202,6 +251,7 @@ void Client::close() {
 		delete _cgi;
 		_cgi = NULL;
 	}
+	closeBodyFile();
 	if (_fd != -1) {
 		::close(_fd);
 		_fd = -1;
@@ -211,6 +261,14 @@ void Client::close() {
 // Private helper methods
 void Client::updateLastActivity() {
 	_lastActivity = std::time(NULL);
+}
+
+void Client::closeBodyFile() {
+	if (_bodyFd >= 0)
+		::close(_bodyFd);
+	_bodyFd = -1;
+	_bodyFileSize = 0;
+	_bodyFileSent = 0;
 }
 
 // Getters
@@ -278,6 +336,8 @@ void Client::clearReadBuffer() {
 void Client::clearWriteBuffer() {
 	_writeBuffer.clear();
 	_writeOffset = 0;
+	_bodyOffset = 0;
+	closeBodyFile();
 }
 
 // Utility methods
