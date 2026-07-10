@@ -37,6 +37,7 @@ public:
 	// Getters
 	const std::string&					getHost() const;
 	int									getPort() const;
+	const std::vector<std::string>&		getServerNames() const;
 	size_t								getClientMaxBodySize() const;
 	const std::string&					getRoot() const;
 	const std::vector<std::string>&		getIndex() const;

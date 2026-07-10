@@ -154,6 +154,18 @@ void Server::closeAllSockets() {
 }
 
 // Private helper methods
+bool Server::hasServerNameConflict(const ServerConfig& a, const ServerConfig& b) {
+	const std::vector<std::string>& namesA = a.getServerNames();
+	const std::vector<std::string>& namesB = b.getServerNames();
+	if (namesA.empty() || namesB.empty())
+		return true;
+	for (size_t i = 0; i < namesA.size(); ++i)
+		for (size_t j = 0; j < namesB.size(); ++j)
+			if (namesA[i] == namesB[j])
+				return true;
+	return false;
+}
+
 void Server::setupListenSockets() {
 	_listenSockets.reserve(_serverConfigs.size());
 
@@ -165,6 +177,12 @@ void Server::setupListenSockets() {
 		for (size_t j = 0; j < _listenSockets.size(); ++j) {
 			if (_listenSockets[j].getHost() == host && _listenSockets[j].getPort() == port) {
 				int fd = _listenSockets[j].getFd();
+				if (hasServerNameConflict(*_listenConfig[fd], _serverConfigs[i])) {
+					std::ostringstream oss;
+					oss << "Duplicate listen " << host << ":" << port
+						<< " with conflicting server_name";
+					throw std::runtime_error(oss.str());
+				}
 				_listenConfig[fd] = &_serverConfigs[i];
 				std::ostringstream oss;
 				oss << "Sharing existing listen socket for " << host << ":" << port;

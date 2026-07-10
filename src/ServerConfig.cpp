@@ -81,6 +81,10 @@ int ServerConfig::getPort() const {
 	return _port;
 }
 
+const std::vector<std::string>& ServerConfig::getServerNames() const {
+	return _serverNames;
+}
+
 size_t ServerConfig::getClientMaxBodySize() const {
 	return _clientMaxBodySize;
 }

@@ -13,9 +13,6 @@
 #include <limits.h>
 
 namespace {
-	// CGI bodies larger than this are streamed via a temp file instead of being
-	// held in memory. Keeps small/common CGI responses in memory (unchanged),
-	// bounds memory under large concurrent bodies.
 	static const size_t SPILL_THRESHOLD = 1024 * 1024;
 
 	static std::string toString(size_t value) {
@@ -268,8 +265,6 @@ ssize_t CgiHandler::readOutput() {
 	if (bytes > 0) {
 		_startTime = std::time(NULL);
 		if (_bodyFd >= 0) {
-			// Already spilling: the header block stays in _output, the body
-			// goes straight to the temp file so memory stays bounded.
 			if (::write(_bodyFd, buffer, static_cast<size_t>(bytes)) == bytes)
 				_bodyBytes += static_cast<size_t>(bytes);
 			else
@@ -289,8 +284,6 @@ ssize_t CgiHandler::readOutput() {
 				_bodyStart = end + sep;
 			}
 		}
-		// Once headers are known and the buffered body exceeds the threshold,
-		// move it to a temp file and free the in-memory copy.
 		if (_headersLocated && _output.size() - _bodyStart > SPILL_THRESHOLD) {
 			openBodyFile();
 			if (_bodyFd >= 0) {
@@ -392,9 +385,6 @@ void CgiHandler::finish() {
 		return;
 	}
 	parseOutput();
-	// Body was spilled to the temp file: parseOutput left the response body
-	// empty; tell the response its entity is external so Content-Length is
-	// correct and the client streams it straight from the file.
 	if (_bodyFd >= 0)
 		_response.setExternalBodyLength(_bodyBytes);
 }

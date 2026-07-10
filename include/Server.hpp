@@ -23,6 +23,7 @@ private:
 
 	// Private helper methods
 	void		setupListenSockets();
+	static bool	hasServerNameConflict(const ServerConfig& a, const ServerConfig& b);
 	void		acceptNewConnection(int listenFd);
 	void		handleClientRead(int clientFd);
 	void		handleClientWrite(int clientFd);
